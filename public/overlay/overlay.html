@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scoreboard-X · Overlay</title>
+<link rel="stylesheet" href="/overlay/overlay.css">
+</head>
+<body>
+<div id="stage">
+
+  <!-- main board: small / large tiers, anchored top-left -->
+  <div id="board" class="cap-width is-hidden ambient">
+    <div class="board-glow"></div>
+    <div class="board-bg"></div>
+    <div class="board-grid">
+      <div class="cell-event" data-flip>
+        <span class="event-text swap-box"></span>
+      </div>
+      <div class="box-period" data-flip>
+        <span class="period-pill"><span class="period-text swap-box"></span></span>
+      </div>
+      <div class="box-clock" data-flip>
+        <div class="clock-tapes"></div>
+        <div class="clock-word"></div>
+      </div>
+      <div class="team team-a row-large">
+        <div class="team-bg" data-team-bg="A"></div>
+        <div class="team-flash"></div>
+        <div class="team-name" data-flip><span class="name-swap swap-box"></span></div>
+        <div class="team-score"><div class="score-tape"></div></div>
+        <i class="team-bar"></i>
+      </div>
+      <div class="team team-b row-large">
+        <div class="team-bg" data-team-bg="B"></div>
+        <div class="team-flash"></div>
+        <div class="team-name" data-flip><span class="name-swap swap-box"></span></div>
+        <div class="team-score"><div class="score-tape"></div></div>
+        <i class="team-bar"></i>
+      </div>
+    </div>
+    <div class="icon-rail rail-a"></div>
+    <div class="icon-rail rail-b"></div>
+  </div>
+
+  <!-- bottom-centre banner: one team / event person, or one organisation (icon + name).
+       Pure fade in / out; yields to the full-frame board and the roster panels. -->
+  <div id="bottombar" class="bb-hidden">
+    <div class="bb-card">
+      <div class="bb-bg"></div>
+      <div class="bb-icon"><img alt=""></div>
+      <div class="bb-text">
+        <div class="bb-name"></div>
+        <div class="bb-sub"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- full-frame board: bottom-center, shown / hidden as a whole -->
+  <div id="fullboard" class="is-hidden ambient">
+    <div class="board-glow"></div>
+    <div class="board-bg"></div>
+    <div class="board-grid">
+      <div class="cell-event">
+        <span class="event-text swap-box"></span>
+      </div>
+      <div class="box-period">
+        <span class="period-pill"><span class="period-text swap-box"></span></span>
+      </div>
+      <div class="box-clock">
+        <div class="clock-tapes"></div>
+        <div class="clock-word"></div>
+      </div>
+      <div class="team team-a">
+        <div class="team-bg" data-team-bg="A"></div>
+        <div class="team-flash"></div>
+        <div class="team-name"><span class="name-swap swap-box"></span></div>
+        <div class="team-score"><div class="score-tape"></div></div>
+      </div>
+      <div class="team team-b">
+        <div class="team-bg" data-team-bg="B"></div>
+        <div class="team-flash"></div>
+        <div class="team-name"><span class="name-swap swap-box"></span></div>
+        <div class="team-score"><div class="score-tape"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- team roster panels: left (A) / right (B) columns, visible only while the
+       board is full-frame or off. Synchronized manual paging from the admin. -->
+  <div id="rosterA" class="roster-panel side-a is-hidden">
+    <div class="rp-bg"></div>
+    <div class="rp-inner">
+      <div class="rp-head"><div class="rp-head-bg"></div><span class="rp-title"></span></div>
+      <div class="rp-rows"></div>
+      <div class="rp-dots"></div>
+    </div>
+  </div>
+  <div id="rosterB" class="roster-panel side-b is-hidden">
+    <div class="rp-bg"></div>
+    <div class="rp-inner">
+      <div class="rp-head"><div class="rp-head-bg"></div><span class="rp-title"></span></div>
+      <div class="rp-rows"></div>
+      <div class="rp-dots"></div>
+    </div>
+  </div>
+
+  <!-- top-right persistent logos: admin-picked corner/ images in uniform squares,
+       sliding in / out from the right. Yield to the TEAM B / both roster panel. -->
+  <div id="cornerlogos"></div>
+
+  <!-- top-centre info banner (REFEREE / MATCH CONTROL), F1-style: chip pops in
+       alone, then the body slides out from behind it. Manual show / hide. -->
+  <div id="infobar" class="ib-hidden">
+    <div class="ib-strip">
+      <div class="ib-body">
+        <div class="ib-icon"></div>
+        <div class="ib-text"><b class="ib-cat"></b><span class="ib-msg"></span></div>
+      </div>
+      <div class="ib-chip"></div>
+    </div>
+  </div>
+
+  <canvas id="fx" width="1920" height="1080"></canvas>
+</div>
+<script type="module" src="/overlay/overlay.js"></script>
+</body>
+</html>

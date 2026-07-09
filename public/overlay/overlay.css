@@ -1,0 +1,737 @@
+/* Scoreboard-X overlay — 1920x1080 stage.
+ * #board      = small / large tiers, anchored top-left
+ * #fullboard  = full-frame tier, anchored bottom-center
+ */
+
+/* ------------------------------------------------------------ fonts */
+@font-face {
+  font-family: 'Oswald';
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+  src: url('/vendor/fonts/oswald-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+2074, U+20AC, U+2122, U+2212;
+}
+@font-face {
+  font-family: 'Oswald';
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+  src: url('/vendor/fonts/oswald-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Archivo Black';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/vendor/fonts/archivo-black-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F;
+}
+@font-face {
+  font-family: 'Archivo Black';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/vendor/fonts/archivo-black-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-024F, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF;
+}
+@font-face {
+  font-family: 'GenShin Gothic';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/vendor/fonts/GenShinGothic-Monospace-Heavy-2.ttf') format('truetype');
+}
+
+:root {
+  --font-sport: 'Oswald', 'Bahnschrift', 'Arial Narrow', 'GenShin Gothic', sans-serif;
+  --font-black: 'Archivo Black', 'Arial Black', 'GenShin Gothic', sans-serif;
+  --digit-r: 0.62;              /* measured at runtime: digit width / font-size */
+
+  --panel: #0F1116;
+  --panel-2: #14171D;
+  --panel-line: rgba(255, 255, 255, 0.2);
+  --tx: #F2F4F8;
+  --tx-dim: rgba(242, 244, 248, 0.6);
+
+  --urgent: #FFB020;
+  --critical: #FF3348;
+
+  /* team palettes — set from JS */
+  --a-base: #D6152C; --a-deep: #A11021; --a-bright: #FF5A64; --a-glow: #FFD9DC; --a-ink: #fff;
+  --b-base: #F6C500; --b-deep: #BC9600; --b-bright: #FFE45C; --b-glow: #FFF3C4; --b-ink: #0D0F13;
+}
+
+/* ------------------------------------------------------------ stage */
+html, body {
+  margin: 0; padding: 0;
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+body.bg-pitch {
+  background-size: 100px 100px;
+  background-position: center center;
+  background-image: 
+    linear-gradient(to right, #464b54 1px, transparent 1px),
+    linear-gradient(to bottom, #464b54 1px, transparent 1px);
+}
+body.bg-dark { background: #17191E; }
+
+#stage {
+  position: absolute;
+  top: 0; left: 0;
+  width: 1920px; height: 1080px;
+  transform-origin: top left;
+  font-family: var(--font-sport);
+  color: var(--tx);
+  -webkit-font-smoothing: antialiased;
+}
+
+#fx {
+  position: absolute; inset: 0;
+  width: 1920px; height: 1080px;
+  pointer-events: none;
+  z-index: 60;
+}
+
+/* ----------------------------------------------------- board shells */
+/* --row-a / --row-b drive the per-row small<->large height morph (teamA / teamB
+   grid tracks). Registered so WAAPI can interpolate them (Chromium / OBS). JS sets
+   the resting value per row and glides them for a real (non-scaled) height change. */
+@property --row-a { syntax: '<length>'; inherits: true; initial-value: 150px; }
+@property --row-b { syntax: '<length>'; inherits: true; initial-value: 150px; }
+
+#board {
+  --row-a: 150px;
+  --row-b: 150px;
+  max-width: none;
+  min-width: 150px;
+  width: fit-content;
+  position: absolute;
+  top: calc(var(--margin, 36) * 1px);
+  left: calc(var(--margin, 36) * 1px);
+  transform: scale(var(--scale, 1));
+  transform-origin: top left;
+  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              top 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              left 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              width 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+              min-width 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+#board.cap-width { max-width: 500px; }   /* JS adds this whenever any team row is large */
+#board.is-hidden { visibility: hidden; }
+
+#fullboard {
+  position: absolute;
+  bottom: calc(var(--margin, 36) * 1px);
+  left: 50%;
+  width: calc(1920px - (var(--margin, 36) * 2px));
+  transform: translateX(-50%) scale(var(--full-scale, 1));
+  transform-origin: bottom center;
+  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
+              bottom 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+#fullboard.is-hidden { visibility: hidden; }
+
+.board-glow {
+  position: absolute; inset: -10px;
+  border-radius: 0;
+  box-shadow: 0 0 70px rgba(120, 160, 255, 0.16);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.ambient .board-glow { animation: glowBreath 9s ease-in-out infinite; }
+@keyframes glowBreath {
+  0%, 100% { opacity: 0.4; }
+  50%      { opacity: 0.8; }
+}
+
+.board-bg {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(140% 90% at 20% 0%, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0) 52%),
+    repeating-linear-gradient(24deg, rgba(255,255,255,0.022) 0 1px, rgba(255,255,255,0) 1px 8px),
+    var(--panel);
+  border: 1px solid var(--panel-line);
+  /* no drop shadow: the reveal clip (inset(0 0 0 0) on .board-bg) would clip it away
+     after the first hide/show, so a resting board had a shadow only on first load.
+     Removed for a consistent flat look. The inset hairline lives inside the clip, so it stays. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+/* ------------------------------------------------------------ grids */
+.board-grid {
+  position: relative;
+  display: grid;
+  z-index: 2;
+  overflow: hidden;
+}
+
+#board .board-grid {
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto var(--row-a) var(--row-b);
+  grid-template-areas:
+    "event  event"
+    "period clock"
+    "teamA  teamA"
+    "teamB  teamB";
+}
+#fullboard .board-grid {
+  grid-template-columns: 1fr 340px 1fr;
+  grid-template-rows: auto 112px 156px;
+  grid-template-areas:
+    "event event  event"
+    "teamA period teamB"
+    "teamA clock  teamB";
+}
+
+/* ------------------------------------------------------------ event */
+.cell-event {
+  grid-area: event;
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  height: 56px;
+  overflow: hidden;
+}
+#fullboard .cell-event { height: 58px; }
+.cell-event::after {
+  content: '';
+  position: absolute; left: 12px; right: 12px; bottom: 0;
+  height: 1px; background: var(--panel-line);
+}
+.event-text {
+  font-size: 24px; font-weight: 600;
+  text-transform: uppercase;
+  color: rgba(242, 244, 248, 0.94);
+  white-space: nowrap;
+  padding: 0 20px;
+}
+
+/* ----------------------------------------------------------- period */
+.box-period {
+  grid-area: period;
+  align-self: center;
+  justify-self: start;
+  margin-left: 14px;
+  overflow: hidden;
+}
+#fullboard .box-period {
+  justify-self: center; align-self: end;
+  margin: 0 0 6px 0;
+}
+.period-pill {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  white-space: nowrap;
+}
+.period-text {
+  font-size: 24px; font-weight: 600;
+  text-transform: uppercase;
+  color: var(--tx);
+  white-space: nowrap;
+}
+#fullboard .period-pill { padding: 3px 10px; }
+
+/* ------------------------------------------------------------ clock */
+.box-clock {
+  grid-area: clock;
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  height: 66px;
+  padding: 0 16px;
+}
+#fullboard .box-clock {
+  height: auto;
+  align-items: flex-start;
+  padding-top: 8px;
+}
+
+.clock-tapes {
+  font-size: 35px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--tx);
+  transition: color 0.4s ease;
+}
+#fullboard .clock-tapes { font-size: 76px; font-weight: 500; }
+
+.box-clock.urgent   .clock-tapes { color: var(--urgent); }
+.box-clock.critical .clock-tapes { color: var(--critical); }
+.box-clock.end-mode  .clock-tapes { color: var(--critical); }
+.box-clock.end-mode  .clock-word { color: var(--critical); }
+.clock-word {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 36px; font-weight: 600;
+  text-transform: uppercase;
+  color: var(--tx);
+  white-space: nowrap;
+  padding: 0 20px;
+}
+#fullboard .clock-word { font-size: 60px; align-items: flex-start; padding-top: 8px; }
+.clock-word .word-row { display: flex; justify-content: center; }
+/* full-frame MATCH / END stacks two lines — tighten so END clears the grid */
+#fullboard .clock-word .word-row { line-height: 0.9; }
+
+/* ------------------------------------------------------------ teams */
+.team {
+  position: relative;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.team-a { grid-area: teamA; }
+.team-b { grid-area: teamB; }
+
+.team-bg {
+  position: absolute; inset: 0;
+  /* opacity is driven by JS (WAAPI) during small<->large morphs; class rules
+     below set the resting value for instant (clipped) tier changes */
+}
+.team-bg .facet-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.team.row-small .team-bg { opacity: 0; }
+.ambient .facet-drift { animation: facetDrift var(--drift-dur, 12s) ease-in-out infinite alternate; }
+@keyframes facetDrift {
+  from { transform: translate(0px, 0px) rotate(0deg); }
+  to   { transform: translate(-6px, 2.4px) rotate(0.7deg); }
+}
+
+.team-flash {
+  position: absolute; inset: 0;
+  opacity: 0; pointer-events: none;
+  z-index: 2;
+}
+.team-a .team-flash { background: var(--a-glow); }
+.team-b .team-flash { background: var(--b-glow); }
+
+/* theme color bar — small tier only (far right of each row) */
+.team-bar {
+  position: absolute;
+  right: 0; top: 0; bottom: 0;
+  width: 12px;
+  opacity: 0;
+  z-index: 3;
+}
+.team-a .team-bar { background: var(--a-base); }
+.team-b .team-bar { background: var(--b-base); }
+.team.row-small .team-bar { opacity: 1; }
+#fullboard .team-bar { display: none; }
+
+.team-name {
+  position: relative; z-index: 3;
+  display: flex; justify-content: center;
+  margin-top: 12px;
+  height: 40px;
+  padding: 0 20px;
+  font-size: 31px; font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: color 0.5s ease;
+}
+.team-a .team-name { color: var(--a-ink); }
+.team-b .team-name { color: var(--b-ink); }
+.team.row-small .team-name { color: var(--tx); }
+#fullboard .team-name { margin-top: 14px; height: 56px; font-size: 46px; }
+
+.team-name .goal-word {
+  font-family: var(--font-sport);
+}
+
+.team-score {
+  position: relative; z-index: 3;
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  margin-top: -8px;
+  padding-bottom: 12px;
+  font-size: 88px; font-weight: 700;
+  line-height: 1;
+  transition: color 0.5s ease;
+}
+.team-a .team-score { color: var(--a-ink); }
+.team-b .team-score { color: var(--b-ink); }
+.team.row-small .team-score { color: var(--tx); }
+#fullboard .team-score { margin-top: -12px; font-size: 148px; padding-bottom: 12px; }
+
+/* small row: one horizontal row per team — name | score | color bar */
+.team.row-small {
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  padding-left: 18px;
+  box-shadow: inset 0 1px 0 var(--panel-line);
+}
+.team.row-small .team-name {
+  margin: 0;
+  height: auto;
+  padding: 0;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  font-size: 26px;
+}
+/* left-align the name box's content in the small row, so a GOAL! word (narrower than the
+   reserved name width) sits at the left like the name — not centred in the reserved box */
+.team.row-small .name-swap { justify-content: flex-start; }
+.team.row-small .team-score {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 30px 0 6px;
+  font-size: 34px;
+}
+
+/* ------------------------------------------------------------ tapes */
+.tape-group { display: inline-flex; align-items: center; }
+.tape-slot {
+  position: relative;
+  display: inline-block;
+  width: calc(var(--digit-r) * 1em);
+  height: 1.28em;
+  overflow: hidden;
+}
+.tape-slot.punct { width: auto; min-width: 0.28em; }
+.tape-cell {
+  position: absolute; left: 0; top: 0;
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  will-change: transform;
+}
+
+/* ------------------------------------------------------------ swaps */
+.swap-box { position: relative; display: inline-flex; justify-content: center; perspective: 320px; }
+.swap-box .swap-out { position: absolute; left: 50%; transform: translateX(-50%); white-space: nowrap; }
+.swap-cur, .swap-out { display: inline-flex; white-space: nowrap; }
+.lt { display: inline-block; will-change: transform, opacity; }
+.box-clock, .clock-word { perspective: 340px; }
+.team-name .goal-word { font-size: 1.12em; }
+
+/* runtime helpers */
+.tape-host { position: relative; display: inline-flex; justify-content: center; }
+.tape-old { position: absolute; left: 50%; top: 0; }
+.facet-layer { position: absolute; inset: 0; }
+.score-ghost { z-index: 55; }
+
+/* ------------------------------------------------- event icon rails */
+.icon-rail {
+  position: absolute;
+  left: 0; top: 0;
+  display: flex;
+  align-items: flex-start;
+  pointer-events: none;
+  z-index: 6;
+  /* no CSS transition: trackRails() repositions this every rAF frame, so the rail must
+     track the board edge in real time. A transition here would lag / use a different
+     easing than the small<->large morph and drift the icons out of sync. */
+  will-change: transform;
+}
+.evicon-wrap { overflow: hidden; }
+.evicon {
+  height: 48px;
+  display: flex; align-items: center;
+  margin-left: 8px;
+  padding: 0 10px;
+  background: var(--ev-bg, #E0132F);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  white-space: nowrap;
+}
+.evicon.tone-FOUL    { --ev-bg: #E0132F; }
+.evicon.tone-TIMEOUT { --ev-bg: #0E9E64; }
+.evicon.tone-SUSP2   { --ev-bg: #FF8A00; }
+.evicon.tone-YELLOW  { --ev-bg: #F5C400; color: #15181E; }
+.evicon.tone-RED     { --ev-bg: #C4001D; }
+.evicon.tone-BLUE    { --ev-bg: #1E6ADB; }
+.evicon.tone-MEDICAL { --ev-bg: #0FA3B1; }
+.evicon-glyph { display: flex; flex: none; }
+.evicon-glyph svg { width: 28px; height: 28px; display: block; }
+.evicon-labelwrap { overflow: hidden; margin-left: 10px; }
+.evicon-label {
+  display: inline-block;
+  font-size: 24px; font-weight: 700;
+  letter-spacing: 0.08em;
+}
+/* 2-min suspension countdown — same rolling-tape look as the main clock, no decimals */
+.evicon-timer {
+  display: inline-flex;
+  font-size: 27px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------- corner logos (top right) */
+/* Uniform transparent squares (object-fit: contain). A new logo slides in from the
+ * right into the corner slot while the earlier ones shift left, so reading order
+ * (left -> right) equals the admin click order. Every slot clips its own tile, so
+ * sliding tiles never cross a neighbour. JS keeps top/right at max(12, --margin). */
+#cornerlogos {
+  position: absolute;
+  top: 36px; right: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  pointer-events: none;
+  z-index: 6;
+}
+/* each logo keeps a UNIFORM HEIGHT and scales its width by aspect (like the org banner
+   icon) — no squaring. The slot clips its own tile so a sliding tile never crosses a
+   neighbour; JS animates the slot width (measured per image) for the slide. */
+.cl-slot {
+  box-sizing: border-box;
+  padding-left: 22px;        /* lead-in gap between logos */
+  overflow: hidden;
+  flex: none;
+}
+.cl-tile { height: 120px; display: flex; align-items: center; }
+.cl-tile img { height: 120px; width: auto; max-width: 460px; object-fit: contain; display: block; }
+
+/* ------------------------------------------------- info banner (top centre) */
+#infobar {
+  position: absolute;
+  top: 30px; left: 0; right: 0;
+  display: flex; justify-content: center;
+  pointer-events: none;
+  z-index: 7;
+  will-change: transform;
+}
+#infobar.ib-hidden { display: none; }
+.ib-strip {
+  display: flex; align-items: stretch;
+  min-height: 80px;
+  max-width: 1240px;
+  background: rgba(13, 15, 20, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  will-change: transform, clip-path;
+}
+.ib-body { display: flex; align-items: stretch; flex: 1; min-width: 0; }
+.ib-icon {
+  flex: none;
+  width: 80px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+}
+.ib-icon svg { width: 40px; height: 40px; display: block; }
+.ib-text {
+  display: flex; align-items: center;
+  min-width: 0;
+  padding: 15px 30px 15px 26px;
+  font-size: 25px; line-height: 1.34;
+  color: #F2F4F8;
+}
+.ib-cat {
+  flex: none;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  margin-right: 12px;
+  color: #fff;
+}
+.ib-msg { min-width: 0; }
+.ib-chip {
+  flex: none;
+  display: flex; align-items: center;
+  padding: 0 28px;
+  font-size: 30px; font-weight: 800;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------ bottom banner (bottom centre) */
+/* One card at a time: a team person (team facet theme), an event official (white facet
+ * theme) or an organisation (pure white + icon). Fixed height — banners differ only in
+ * width (fit-content, capped). Pure fade in / out; yields to the full board / rosters. */
+#bottombar {
+  position: absolute;
+  bottom: calc(var(--margin, 36) * 1px);
+  left: 0; right: 0;
+  display: flex; justify-content: center;
+  pointer-events: none;
+  z-index: 4;
+}
+#bottombar.bb-hidden { display: none; }
+.bb-card {
+  position: relative;
+  display: flex; align-items: center;
+  height: 120px;
+  min-width: 460px;
+  max-width: 1180px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+.bb-card.bb-light { border-color: rgba(13, 15, 19, 0.16); }  /* hairline must read on white */
+.bb-bg { position: absolute; inset: 0; background: var(--panel); }
+/* organisation card: the same faceted white theme as an event official, but the left
+ * (icon) side dissolves over a long span into pure white, so the icon sits on a fully
+ * clean white field while the right keeps the subtle facets. */
+.bb-card.bb-org .bb-bg { background: #FFFFFF; }
+.bb-card.bb-org .bb-bg::after {
+  content: '';
+  position: absolute; inset: 0;
+  /* solid white under / around the icon, then a short fade to the facet — start / end
+     are set from the icon's real width in JS (bbSetOrgMask); the values below are only
+     a first-paint fallback. */
+  background: linear-gradient(to right,
+    #fff 0,
+    #fff var(--bb-fade-start, 300px),
+    rgba(255, 255, 255, 0) var(--bb-fade-end, 380px));
+  pointer-events: none;
+}
+.bb-bg .facet-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.bb-icon {
+  position: relative; z-index: 2;
+  flex: none;
+  display: flex; align-items: center;
+  /* the source logos carry NO margin of their own — reserve equal padding on BOTH sides so
+     the icon has breathing room on the right too, including during the pop-in reveal */
+  padding: 0 32px;
+}
+.bb-icon img { height: 84px; width: auto; max-width: 300px; object-fit: contain; display: block; }
+.bb-icon.bb-noicon { display: none; }
+.bb-text {
+  position: relative; z-index: 2;
+  display: flex; flex-direction: column; justify-content: center;
+  gap: 5px;
+  padding: 0 46px;
+  min-width: 0;
+}
+.bb-name {
+  font-size: 44px; font-weight: 600;
+  line-height: 1.06;
+  color: var(--bb-ink, #F2F4F8);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;  /* backstop — JS shrinks first */
+}
+.bb-sub {
+  font-size: 26px; font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--bb-ink-dim, rgba(242, 244, 248, 0.72));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------- roster panels (sides) */
+/* Left / right columns, visible only while the board is full-frame or off.
+ * Anchored with the SAME --margin as the board (unified edges). Width is
+ * fit-content — the panel grows with its longest row — capped at half the
+ * stage minus the outer margin and half a 48px centre gap. --rp-c / --rp-ink
+ * come from the team palette (JS). Pagination counts visual rows incl. the
+ * group headers (see overlay.js), so mixed row heights are fine. */
+.roster-panel {
+  position: absolute;
+  top: calc(var(--margin, 36) * 1px);
+  width: fit-content;
+  min-width: 340px;
+  max-width: calc(960px - (var(--margin, 36) * 1px) - 24px);
+  z-index: 5;
+}
+.roster-panel.side-a { left: calc(var(--margin, 36) * 1px); }
+.roster-panel.side-b { right: calc(var(--margin, 36) * 1px); }
+.roster-panel.is-hidden { visibility: hidden; }
+
+.rp-bg {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(140% 90% at 20% 0%, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0) 52%),
+    repeating-linear-gradient(24deg, rgba(255,255,255,0.022) 0 1px, rgba(255,255,255,0) 1px 8px),
+    var(--panel);
+  border: 1px solid var(--panel-line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);   /* same flat look as the board */
+}
+.rp-inner { position: relative; z-index: 2; padding-bottom: 16px; }
+
+/* header = the same faceted theme block as the scoreboard team rows:
+ * facetSVG backdrop + palette ink text (set in rosterApplyTheme) */
+.rp-head {
+  position: relative;
+  display: flex; align-items: center;
+  height: 68px;
+  padding: 0 26px;
+  overflow: hidden;
+  border-bottom: 2px solid var(--panel-line);
+}
+.side-b .rp-head { justify-content: flex-end; }   /* mirrored, like the full board's B side */
+.rp-head-bg { position: absolute; inset: 0; }
+.rp-head-bg .facet-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rp-title {
+  position: relative; z-index: 2;
+  font-size: 36px; font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+#rosterA .rp-title { color: var(--a-ink); }
+#rosterB .rp-title { color: var(--b-ink); }
+
+/* rows host: one or two side-by-side columns (overlay.js decides). Each column
+ * is a vertical stack opening with a group subtitle. */
+.rp-rows {
+  padding: 4px 26px 0;
+  display: flex; flex-direction: row; align-items: flex-start;
+  gap: 44px;
+  overflow: hidden;
+}
+.rp-col { display: flex; flex-direction: column; min-width: 230px; flex: none; }
+/* Team B reads right-to-left: columns pack from the right edge, rows mirror */
+.side-b .rp-rows { flex-direction: row-reverse; }
+.side-b .rp-row { flex-direction: row-reverse; }
+.side-b .rp-ghead { flex-direction: row-reverse; }
+.side-b .rr-name { text-align: right; }
+
+/* group headers（領隊／教練／工作人員／球員）— theme tick + hairline underneath */
+.rp-ghead {
+  display: flex; align-items: flex-end; gap: 12px;
+  height: 52px;
+  padding-bottom: 8px;
+  font-size: 27px; font-weight: 600;
+  color: var(--tx-dim);
+  border-bottom: 2px solid var(--panel-line);
+  white-space: nowrap;
+  flex: none;
+}
+.rp-ghead::before {
+  content: '';
+  width: 6px; height: 30px;
+  background: var(--rp-c, #D6152C);
+  margin-bottom: 2px;
+  flex: none;
+}
+.rp-row {
+  display: flex; align-items: center; gap: 14px;
+  height: 48px;
+  flex: none;
+}
+.rp-row + .rp-row { border-top: 2px solid var(--panel-line); }   /* row dividers */
+.rr-num {
+  flex: none;
+  min-width: 44px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 6px;
+  background: var(--rp-c, #D6152C);
+  color: var(--rp-ink, #fff);
+  font-size: 24px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.rr-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 27px; font-weight: 600;
+  color: var(--tx);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;   /* backstop — the panel grows first */
+}
+.rr-sub {
+  flex: none;
+  font-size: 27px; font-weight: 500;
+  color: var(--tx-dim);
+  white-space: nowrap;
+}
+
+.rp-dots {
+  display: flex; justify-content: center; gap: 9px;
+  padding-top: 14px;
+}
+.rp-dots:empty { display: none; }
+.rp-dots i {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  transition: background 0.25s ease, transform 0.25s ease;
+}
+.rp-dots i.on { background: var(--rp-c, #D6152C); transform: scale(1.3); }

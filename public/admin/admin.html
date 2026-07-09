@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scoreboard-X · 控制台</title>
+<link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">
+    <span class="brand-mark">SB·X</span>
+    <span class="brand-name">SCOREBOARD-X</span>
+    <span class="conn" id="conn" title="連線狀態"></span>
+  </div>
+  <div class="quick">
+    <div class="q-clock" id="qClock">30:00</div>
+    <button id="qStartPause" class="btn q-btn">開始</button>
+    <button id="qGoalA" class="btn q-goal"><small id="qGoalAName">NICE</small>GOAL</button>
+    <button id="qGoalB" class="btn q-goal"><small id="qGoalBName">LENS</small>GOAL</button>
+  </div>
+</header>
+
+<main>
+  <!-- ==================================================== 左列 / 主控制 -->
+  <section class="col col-main">
+
+    <!-- 比分 -->
+    <div class="card" id="cardScore">
+      <div class="card-title">比分 <span class="hint">GOAL 觸發進球特效；±1 為靜默修正</span>
+        <label class="row" style="margin-left:auto;gap:6px;font-weight:400;font-size:13px;color:var(--tx-dim);">GOAL 分值
+          <input class="in sm-num" id="goalDelta" type="number" min="-19" max="19" step="1" inputmode="numeric">
+        </label>
+      </div>
+      <div class="score-grid">
+        <div class="score-side" id="sideA">
+          <div class="score-team" id="scoreNameA">OGC NICE</div>
+          <div class="score-val" id="scoreValA">0</div>
+          <button class="btn goal-btn" id="goalA">GOAL</button>
+          <div class="row">
+            <button class="btn sm" id="minusA">−1</button>
+            <button class="btn sm" id="plusA">+1</button>
+            <input class="in sm-num" id="setA" type="number" min="0" max="199" inputmode="numeric">
+            <button class="btn sm" id="setABtn">設定</button>
+          </div>
+        </div>
+        <div class="score-vs">:</div>
+        <div class="score-side" id="sideB">
+          <div class="score-team" id="scoreNameB">RC LENS</div>
+          <div class="score-val" id="scoreValB">0</div>
+          <button class="btn goal-btn" id="goalB">GOAL</button>
+          <div class="row">
+            <button class="btn sm" id="minusB">−1</button>
+            <button class="btn sm" id="plusB">+1</button>
+            <input class="in sm-num" id="setB" type="number" min="0" max="199" inputmode="numeric">
+            <button class="btn sm" id="setBBtn">設定</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 事件圖標 -->
+    <div class="card" id="cardBanner">
+      <div class="card-title">事件圖標 <span class="hint">即時掛在計分板右側；保留至手動移除</span></div>
+      <div class="row seg-row">
+        <div class="seg" id="bannerTeamSeg">
+          <button class="seg-btn active" data-team="A" id="segTeamA">NICE</button>
+          <button class="seg-btn" data-team="B" id="segTeamB">LENS</button>
+        </div>
+      </div>
+      <div class="banner-btns">
+        <button class="btn bn" data-type="FOUL"    style="--bn:#E0132F">FOUL</button>
+        <button class="btn bn" data-type="TIMEOUT" style="--bn:#0E9E64">TIMEOUT</button>
+        <button class="btn bn" data-type="SUSP2"   style="--bn:#FF8A00;--bn-ink:#15181E">2′ 罰時</button>
+        <button class="btn bn" data-type="YELLOW"  style="--bn:#F5C400;--bn-ink:#15181E">黃牌</button>
+        <button class="btn bn" data-type="RED"     style="--bn:#C4001D">紅牌</button>
+        <button class="btn bn" data-type="BLUE"    style="--bn:#1E6ADB">藍牌</button>
+        <button class="btn bn" data-type="MEDICAL" style="--bn:#0FA3B1">醫療</button>
+      </div>
+      <div class="active-banners" id="activeBanners"></div>
+      <div class="row">
+        <button class="btn ghost" id="clearBanners">清除全部圖標</button>
+      </div>
+    </div>
+
+    <!-- 資訊橫幅 -->
+    <div class="card" id="cardInfoBanner">
+      <div class="card-title">資訊橫幅 <span class="hint">螢幕上方置中；一次一張，手動顯示／隱藏</span></div>
+      <div class="ib-status" id="ibStatus">目前未顯示</div>
+      <div class="lbl-sub">REFEREE 裁判判罰</div>
+      <div class="preset-grid" id="ibPresetsRef"></div>
+      <div class="lbl-sub">MATCH CONTROL 賽事控制</div>
+      <div class="preset-grid" id="ibPresetsCtl"></div>
+      <div class="ib-editor">
+        <div class="row">
+          <span class="ib-cat-badge" id="ibCatBadge">REFEREE</span>
+          <input class="in grow" id="ibTitle" maxlength="30" placeholder="判罰結果（右側顯眼字）">
+        </div>
+        <div class="row">
+          <input class="in grow" id="ibPlayer" maxlength="40" placeholder="球員（通常留空）">
+          <input class="in grow" id="ibReason" maxlength="60" placeholder="原因（通常留空）">
+        </div>
+        <textarea class="in ib-body-in" id="ibBody" rows="2" maxlength="120" placeholder="給觀眾的判罰名詞解釋"></textarea>
+        <div class="row">
+          <button class="btn primary grow" id="ibShowBtn">顯示橫幅</button>
+          <button class="btn grow" id="ibHideBtn">隱藏橫幅</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 計時器 -->
+    <div class="card" id="cardTimer">
+      <div class="card-title">計時器 <span class="hint">最後一分鐘顯示 0.1 秒</span> <label class="switch-row" style="margin-left:auto;gap:6px;"><span>顯示</span><input type="checkbox" id="swClock" class="switch"></label></div>
+      <div class="timer-readout"><span id="timerBig">30:00</span><span class="timer-word" id="timerWord"></span><span class="timer-dur" id="timerDur">/ 30:00</span></div>
+      <div class="row">
+        <span class="lbl">計時方式</span>
+        <div class="seg grow" id="timerDirSeg">
+          <button class="seg-btn active" data-dir="down">倒計時</button>
+          <button class="seg-btn" data-dir="up">正計時</button>
+        </div>
+      </div>
+      <div class="row">
+        <button class="btn primary grow" id="startPause">開始</button>
+        <button class="btn grow" id="timerReset">重置</button>
+      </div>
+      <div class="row adjust-row">
+        <button class="btn sm" data-adj="-60000">−1:00</button>
+        <button class="btn sm" data-adj="-10000">−0:10</button>
+        <button class="btn sm" data-adj="-1000">−0:01</button>
+        <button class="btn sm" data-adj="1000">+0:01</button>
+        <button class="btn sm" data-adj="10000">+0:10</button>
+        <button class="btn sm" data-adj="60000">+1:00</button>
+      </div>
+      <div class="row">
+        <input class="in" id="timerSetIn" placeholder="設定當前，如 14:32">
+        <button class="btn" id="timerSetBtn">設定</button>
+      </div>
+      <div class="row wrap">
+        <span class="lbl">半場時長</span>
+        <div class="chips" id="durChips">
+          <button class="chip" data-min="30">30:00</button>
+          <button class="chip" data-min="25">25:00</button>
+          <button class="chip" data-min="20">20:00</button>
+          <button class="chip" data-min="15">15:00</button>
+        </div>
+        <input class="in slim" id="durIn" placeholder="自訂 mm:ss">
+        <button class="btn sm" id="durBtn">設為時長</button>
+      </div>
+      <div class="row">
+        <span class="lbl">顯示模式</span>
+        <div class="seg grow" id="modeSeg">
+          <button class="seg-btn active" data-mode="clock">比賽計時</button>
+          <button class="seg-btn" data-mode="break">BREAK</button>
+          <button class="seg-btn" data-mode="pause">PAUSE</button>
+          <button class="seg-btn" data-mode="matchEnd">MATCH END</button>
+        </div>
+      </div>
+      <label class="switch-row"><span>暫停時自動顯示 PAUSE 字樣</span><input type="checkbox" id="autoPauseWord" class="switch"></label>
+      <label class="switch-row"><span>PAUSE 交替顯示時間</span><input type="checkbox" id="pauseAlternate" class="switch"></label>
+      <label class="switch-row"><span>倒數結束自動顯示 MATCH END</span><input type="checkbox" id="autoEndMode" class="switch"></label>
+      <label class="switch-row"><span>END 交替顯示 0.00</span><input type="checkbox" id="endAlternate" class="switch"></label>
+    </div>
+
+    <!-- 顯示控制 -->
+    <div class="card" id="cardDisplay">
+      <div class="card-title">顯示控制</div>
+      <div class="row">
+        <span class="lbl">顯示計分板</span>
+        <div class="seg grow" id="tierSeg">
+          <button class="seg-btn" data-tier="off">關閉</button>
+          <button class="seg-btn" data-tier="small">小型</button>
+          <button class="seg-btn" data-tier="large">大型</button>
+          <button class="seg-btn" data-tier="full">全畫幅</button>
+        </div>
+      </div>
+      <div class="row">
+        <span class="lbl">小型隊名</span>
+        <div class="seg grow nm-seg" data-tier="small">
+          <button class="seg-btn" data-nm="short">短名</button>
+          <button class="seg-btn" data-nm="full">全名</button>
+        </div>
+      </div>
+      <div class="row">
+        <span class="lbl">大型隊名</span>
+        <div class="seg grow nm-seg" data-tier="large">
+          <button class="seg-btn" data-nm="short">短名</button>
+          <button class="seg-btn" data-nm="full">全名</button>
+        </div>
+      </div>
+      <div class="row">
+        <span class="lbl">全畫幅隊名</span>
+        <div class="seg grow nm-seg" data-tier="full">
+          <button class="seg-btn" data-nm="short">短名</button>
+          <button class="seg-btn" data-nm="full">全名</button>
+        </div>
+      </div>
+      <div class="row">
+        <span class="lbl">進球動效</span>
+        <div class="seg grow" id="goalEffectSeg">
+          <button class="seg-btn" data-effect="minimal">簡約</button>
+          <button class="seg-btn" data-effect="partial">部分展開</button>
+          <button class="seg-btn" data-effect="full">全部展開</button>
+        </div>
+      </div>
+      <div class="row slider-row" id="rowGoalSec">
+        <span class="lbl">展開持續 <b id="goalSecVal">8</b> 秒</span>
+        <input type="range" id="goalSec" min="3" max="20" step="1">
+      </div>
+      <label class="switch-row"><span>BREAK / PAUSE / END 時自動全畫幅</span><input type="checkbox" id="swAutoBreak" class="switch"></label>
+      <label class="switch-row"><span>氛圍動效（緩慢流動）</span><input type="checkbox" id="swAmbient" class="switch"></label>
+      <div class="row slider-row">
+        <span class="lbl">流動速度 <b id="driftSpeedVal">3.0</b>x</span>
+        <input type="range" id="driftSpeed" min="0.1" max="3" step="0.1">
+      </div>
+      <div class="row slider-row">
+        <span class="lbl">整體縮放 <b id="scaleVal">1.00</b></span>
+        <input type="range" id="scale" min="0.7" max="1.4" step="0.01">
+      </div>
+      <div class="row slider-row">
+        <span class="lbl">邊距 <b id="marginVal">36</b>px</span>
+        <input type="range" id="margin" min="-120" max="120" step="2">
+      </div>
+    </div>
+
+    <!-- 比賽資訊 -->
+    <div class="card" id="cardInfo">
+      <div class="card-title">比賽資訊</div>
+      <label class="switch-row"><span>顯示賽事名稱</span><input type="checkbox" id="swEvent" class="switch"></label>
+      <div class="row">
+        <input class="in grow" id="eventText" maxlength="44" placeholder="賽事名稱，如 HANDBALL CUP 2026">
+        <button class="btn" id="eventBtn">應用</button>
+      </div>
+      <label class="switch-row"><span>顯示節次</span><input type="checkbox" id="swPeriod" class="switch"></label>
+      <div class="chips" id="periodChips">
+        <button class="chip" data-p="1ST HALF">1ST HALF</button>
+        <button class="chip" data-p="2ND HALF">2ND HALF</button>
+        <button class="chip" data-p="HALFTIME">HALFTIME</button>
+        <button class="chip" data-p="OT 1">OT 1</button>
+        <button class="chip" data-p="OT 2">OT 2</button>
+        <button class="chip" data-p="SHOOTOUT">SHOOTOUT</button>
+      </div>
+      <div class="row">
+        <input class="in grow" id="periodText" maxlength="22" placeholder="自訂節次文字">
+        <button class="btn" id="periodBtn">應用</button>
+      </div>
+    </div>
+
+    <!-- 球隊設定 -->
+    <div class="card" id="cardTeams">
+      <div class="card-title">球隊設定 <span class="hint">主題色一鍵生成整套配色與背景紋理</span></div>
+      <div class="teams-grid">
+        <div class="team-form" data-team="A">
+          <div class="team-form-title">主隊 A</div>
+          <label>全名（展開時顯示）<input class="in" id="nameA" maxlength="26"></label>
+          <label>短名（緊湊時顯示）<input class="in" id="shortA" maxlength="8"></label>
+          <label>主題色
+            <span class="color-row">
+              <input type="color" id="colorA">
+              <span class="swatches" data-team="A">
+                <i style="background:#D6152C" data-c="#D6152C"></i>
+                <i style="background:#0A57D0" data-c="#0A57D0"></i>
+                <i style="background:#0E9E64" data-c="#0E9E64"></i>
+                <i style="background:#F6C500" data-c="#F6C500"></i>
+                <i style="background:#7A3BFF" data-c="#7A3BFF"></i>
+                <i style="background:#111318" data-c="#111318"></i>
+              </span>
+            </span>
+          </label>
+          <div class="pal-strip" id="palA"></div>
+        </div>
+        <div class="team-form" data-team="B">
+          <div class="team-form-title">客隊 B</div>
+          <label>全名（展開時顯示）<input class="in" id="nameB" maxlength="26"></label>
+          <label>短名（緊湊時顯示）<input class="in" id="shortB" maxlength="8"></label>
+          <label>主題色
+            <span class="color-row">
+              <input type="color" id="colorB">
+              <span class="swatches" data-team="B">
+                <i style="background:#F6C500" data-c="#F6C500"></i>
+                <i style="background:#D6152C" data-c="#D6152C"></i>
+                <i style="background:#0A57D0" data-c="#0A57D0"></i>
+                <i style="background:#00B8C8" data-c="#00B8C8"></i>
+                <i style="background:#FF6A00" data-c="#FF6A00"></i>
+                <i style="background:#F2F3F7" data-c="#F2F3F7"></i>
+              </span>
+            </span>
+          </label>
+          <div class="pal-strip" id="palB"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 隊職員名單 -->
+    <div class="card" id="cardRoster">
+      <div class="card-title">隊職員名單 <span class="hint">顯示於全畫幅／關閉計分板時；除姓名外皆選填</span></div>
+      <div class="row">
+        <span class="lbl">顯示名單</span>
+        <div class="seg grow" id="rosterModeSeg">
+          <button class="seg-btn" data-mode="off">關閉</button>
+          <button class="seg-btn" data-mode="A" id="rModeA">TEAM A</button>
+          <button class="seg-btn" data-mode="B" id="rModeB">TEAM B</button>
+          <button class="seg-btn" data-mode="both">全部</button>
+        </div>
+      </div>
+      <div class="row" id="rosterPageRow">
+        <span class="lbl">頁面（兩隊同步翻頁）</span>
+        <button class="btn sm" id="rPagePrev">‹ 上一頁</button>
+        <b class="r-page-info" id="rPageInfo">1 / 1</b>
+        <button class="btn sm" id="rPageNext">下一頁 ›</button>
+      </div>
+      <div class="seg grow" id="rosterGroupSeg">
+        <button class="seg-btn active" data-group="A" id="rGroupA">A 隊</button>
+        <button class="seg-btn" data-group="B" id="rGroupB">B 隊</button>
+        <button class="seg-btn" data-group="OFF">賽事人員</button>
+      </div>
+      <div id="rosterEditor"></div>
+    </div>
+
+    <!-- 底部橫幅 -->
+    <div class="card" id="cardBottomBanner">
+      <div class="card-title">底部橫幅 <span class="hint">底部置中；隊職員／賽事人員／機構；一次一張</span></div>
+      <div class="ib-status" id="bbStatus">目前未顯示</div>
+      <input class="in" id="bbFilter" placeholder="輸入以篩選人名／機構…">
+      <div class="bb-picker" id="bbPicker"></div>
+      <div class="row">
+        <button class="btn primary grow" id="bbShowBtn">顯示橫幅</button>
+        <button class="btn grow" id="bbHideBtn">隱藏橫幅</button>
+      </div>
+      <details class="adv">
+        <summary>機構橫幅設定（填寫名稱後才可選用；位置可留空）</summary>
+        <div class="org-list" id="bbOrgList"></div>
+      </details>
+    </div>
+
+    <!-- 角落 Logo -->
+    <div class="card" id="cardCorner">
+      <div class="card-title">角落 Logo <span class="hint">右上角常駐；最多 3 個，依點擊順序排列</span></div>
+      <div class="corner-grid" id="cornerGrid"></div>
+      <p class="hint corner-note" id="cornerNote">TEAM B／全部名單顯示時，角落 Logo 會自動暫時讓位。</p>
+    </div>
+
+    <!-- 對局管理 -->
+    <div class="card" id="cardMatches">
+      <div class="card-title">對局管理 <span class="hint">目前對局即時自動保存；載入即完整切換</span></div>
+      <div class="row">
+        <button class="btn primary" id="mNewBtn">＋ 新建對局</button>
+        <button class="btn" id="mExportAllBtn">導出全部</button>
+        <button class="btn" id="mImportBtn">導入對局</button>
+        <input type="file" id="mImportFile" accept=".json,application/json" hidden>
+      </div>
+      <div class="row" id="matchPageRow">
+        <span class="lbl">對局頁面</span>
+        <button class="btn sm" id="mPagePrev">‹ 上一頁</button>
+        <b class="r-page-info" id="mPageInfo">1 / 1</b>
+        <button class="btn sm" id="mPageNext">下一頁 ›</button>
+      </div>
+      <div class="match-list" id="matchList"></div>
+    </div>
+
+    <!-- 管理員設置 -->
+    <div class="card danger" id="cardDanger">
+      <div class="card-title">管理員設置</div>
+      <div class="row">
+        <button class="btn" id="settingsExport">導出設置</button>
+        <button class="btn" id="settingsImport">導入設置</button>
+        <input type="file" id="settingsImportFile" accept=".json,application/json" hidden>
+      </div>
+      <div class="row">
+        <button class="btn warn" id="resetMatch">重置比賽（比分／計時／橫幅）</button>
+        <button class="btn warn outline" id="resetFactory">恢復出廠設定</button>
+      </div>
+    </div>
+
+    <div class="foot">
+      <p><b>OBS 設定</b>：來源 → 瀏覽器，URL 填 <code id="obsUrl"></code>，寬 1920、高 1080、FPS 60；勾選「關閉來源時關閉瀏覽器」<b>不要勾選</b>。</p>
+    </div>
+  </section>
+
+  <!-- ==================================================== 右列 / 預覽 -->
+  <section class="col col-side">
+    <div class="card preview-card">
+      <div class="card-title">直播預覽 <span class="hint">與 OBS 實時同步</span></div>
+      <div class="preview-frame"><iframe id="preview" src="/overlay?bg=pitch" scrolling="no"></iframe></div>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="/admin/admin.js"></script>
+</body>
+</html>

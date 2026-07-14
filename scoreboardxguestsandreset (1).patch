@@ -1,0 +1,92 @@
+From b20bff3f2a9eb8445c0e6de547c6f62c146838f1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 14 Jul 2026 00:24:07 +0000
+Subject: [PATCH] =?UTF-8?q?Add=20=E4=B8=BB=E7=A6=AE=E5=98=89=E8=B3=93/?=
+ =?UTF-8?q?=E5=98=89=E8=B3=93=20official=20roles;=20reset=20closes=20the?=
+ =?UTF-8?q?=20display?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- Add HONOR_GUEST (主禮嘉賓) and GUEST (嘉賓) to the event-personnel roles,
+  wired through server OFF_ROLES, the admin roster editor sections, and the
+  bottom-banner role labels in admin + overlay.
+- reset.match now closes the display (board tier -> off) and clears the
+  roster panels instead of demoting full -> large.
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_012TkibpmPnuk9k2YCaWLzT7
+---
+ public/admin/admin.js     | 5 +++--
+ public/overlay/overlay.js | 1 +
+ server.js                 | 5 +++--
+ 3 files changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/public/admin/admin.js b/public/admin/admin.js
+index e2df877..3ef2b6a 100644
+--- a/public/admin/admin.js
++++ b/public/admin/admin.js
+@@ -390,6 +390,7 @@ $('ibHideBtn').addEventListener('click', () => act('info.hide'));
+ const BB_ROLE_LABEL = {
+   LEADER: '領隊', COACH: '教練', STAFF: '工作人員', PLAYER: '球員',
+   COMMENTATOR: '評論員', REFEREE: '裁判',
++  HONOR_GUEST: '主禮嘉賓', GUEST: '嘉賓',
+ };
+ const noExt = f => String(f).replace(/\.[^.]+$/, '');
+ 
+@@ -726,7 +727,7 @@ document.querySelectorAll('.swatches').forEach(sw => {
+ /* ------------------------------------------------------------ roster */
+ 
+ const ROLE_SECTIONS_TEAM = [['LEADER', '領隊'], ['COACH', '教練'], ['STAFF', '工作人員'], ['PLAYER', '球員']];
+-const ROLE_SECTIONS_OFF = [['COMMENTATOR', '評論員'], ['REFEREE', '裁判']];
++const ROLE_SECTIONS_OFF = [['HONOR_GUEST', '主禮嘉賓'], ['GUEST', '嘉賓'], ['COMMENTATOR', '評論員'], ['REFEREE', '裁判']];
+ let rosterGroup = 'A';
+ let lastRosterJson = '';
+ 
+@@ -1354,7 +1355,7 @@ $('settingsImportFile').addEventListener('change', async e => {
+ 
+ /* danger */
+ $('resetMatch').addEventListener('click', () => {
+-  if (confirm('重置比分、計時器與橫幅？球隊與顯示設置保留。')) act('reset.match');
++  if (confirm('重置比分、計時器與橫幅，並將顯示關閉？球隊與顯示設置保留。')) act('reset.match');
+ });
+ $('resetFactory').addEventListener('click', () => {
+   if (confirm('恢復出廠設定？所有球隊、顏色、名單與顯示設置都會還原。')) act('reset.factory');
+diff --git a/public/overlay/overlay.js b/public/overlay/overlay.js
+index a1af86b..1609e9d 100644
+--- a/public/overlay/overlay.js
++++ b/public/overlay/overlay.js
+@@ -2257,6 +2257,7 @@ const bbSubEl = bottombar.querySelector('.bb-sub');
+ const BB_ROLE_LABEL = {
+   LEADER: '領隊', COACH: '教練', STAFF: '工作人員', PLAYER: '球員',
+   COMMENTATOR: '評論員', REFEREE: '裁判',
++  HONOR_GUEST: '主禮嘉賓', GUEST: '嘉賓',
+   HOST: '主辦單位', SUPPORT: '支持及指導單位', FUNDER: '資助機構',
+ };
+ /* hand-tuned near-white palette for event officials — buildPalette('#FFFFFF') greys
+diff --git a/server.js b/server.js
+index 9bab333..591c3d1 100644
+--- a/server.js
++++ b/server.js
+@@ -75,7 +75,7 @@ const DEFAULT_STATE = {
+ const BANNER_TYPES = ['FOUL', 'TIMEOUT', 'SUSP2', 'YELLOW', 'RED', 'BLUE', 'MEDICAL'];
+ const SUSP2_MS = 120000;      // 2-minute suspension countdown, runs on playing time (freezes with the match clock)
+ const TEAM_ROLES = ['LEADER', 'COACH', 'STAFF', 'PLAYER'];
+-const OFF_ROLES = ['COMMENTATOR', 'REFEREE'];
++const OFF_ROLES = ['HONOR_GUEST', 'GUEST', 'COMMENTATOR', 'REFEREE'];
+ const BB_KINDS = ['person', 'official', 'org'];   // org 位置(role)為選填自由文字
+ const MAX_CORNER_LOGOS = 3;
+ /* logged event types. Team setup + half-duration are intentionally NOT here —
+@@ -1051,7 +1051,8 @@ function applyAction(action) {
+       state.timer.pauseAlternate = DEFAULT_STATE.timer.pauseAlternate;
+       state.timer.autoEndMode = DEFAULT_STATE.timer.autoEndMode;
+       state.timer.endAlternate = DEFAULT_STATE.timer.endAlternate;
+-      if (state.board.tier === 'full') state.board.tier = 'large';
++      state.board.tier = 'off';                          // reset to display-off
++      state.rosterDisplay = { mode: 'off', page: 0 };    // close roster panels too
+       scheduleTimerEnd();
+       break;
+     }
+-- 
+2.43.0
+

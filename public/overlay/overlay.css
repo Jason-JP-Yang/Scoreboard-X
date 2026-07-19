@@ -74,8 +74,8 @@ body.bg-pitch {
   background-size: 100px 100px;
   background-position: center center;
   background-image: 
-    linear-gradient(to right, #464b54 1px, transparent 1px),
-    linear-gradient(to bottom, #464b54 1px, transparent 1px);
+    linear-gradient(to right, #464b54 3px, transparent 3px),
+    linear-gradient(to bottom, #464b54 3px, transparent 3px);
 }
 body.bg-dark { background: #17191E; }
 
@@ -600,11 +600,23 @@ body.bg-dark { background: #17191E; }
   color: var(--bb-ink, #F2F4F8);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;  /* backstop — JS shrinks first */
 }
+/* [隊伍  位置  職稱] — parts separated by a two-space-wide flex gap (no dash) */
 .bb-sub {
+  display: flex; align-items: center; gap: 15px;
   font-size: 26px; font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--bb-ink-dim, rgba(242, 244, 248, 0.72));
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  overflow: hidden;
+}
+.bb-sub .bb-part { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.bb-num {
+  flex: none;
+  min-width: 40px; height: 32px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 8px;
+  background: var(--bb-num-bg, #0D0F13);
+  color: var(--bb-num-tx, #fff);
+  font-size: 25px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
 
 /* ------------------------------------------------- roster panels (sides) */

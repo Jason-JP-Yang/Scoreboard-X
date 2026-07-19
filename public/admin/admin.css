@@ -1,4 +1,5 @@
-/* Scoreboard-X admin — dark, modern, touch-friendly (desktop + phone). */
+/* Scoreboard-X admin — dark, modern, touch-friendly (desktop + phone).
+ * Tabbed layout: 比賽 (dense live grid, zero-scroll target) / 自動化 / 設定. */
 
 @font-face {
   font-family: 'Oswald';
@@ -32,6 +33,10 @@
   --ui: system-ui, 'Segoe UI', 'GenShin Gothic', sans-serif;
   --a-color: #D6152C;
   --b-color: #F6C500;
+  /* 卡片「之間」的間距。卡片「內部」條目的間距是 .card 自己的 gap:3px —— 兩者是
+   * 不同的東西：內部要緊湊，外部要夠寬才分得出這是兩張卡。改這一個值即可全域生效
+   * （密鋪的 column-gap 與卡片的 margin-bottom 必須同值，欄間與欄內才會等距）。 */
+  --card-gap: 8px;
 }
 
 * { box-sizing: border-box; }
@@ -48,14 +53,18 @@ body {
 /* ------------------------------------------------------------ topbar */
 #topbar {
   position: sticky; top: 0; z-index: 100;
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 18px;
   background: rgba(11, 13, 17, 0.88);
   backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
-  flex-wrap: wrap;
 }
-.brand { display: flex; align-items: center; gap: 10px; }
+/* 單列：品牌靠左、分頁列真正置中（1fr auto 1fr 的空右欄負責對稱） */
+.topbar-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center; gap: 12px;
+  padding: 8px 16px;
+}
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand-mark {
   font-family: var(--num); font-weight: 700; font-size: 15px;
   background: linear-gradient(135deg, var(--accent), #7A3BFF);
@@ -65,42 +74,82 @@ body {
 .conn { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); display: inline-block; transition: background 0.3s; }
 .conn.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 
-.quick { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-wrap: wrap; }
-.q-clock {
-  font-family: var(--num); font-weight: 600; font-size: 26px;
-  font-variant-numeric: tabular-nums;
-  min-width: 92px; text-align: center;
-  padding: 2px 10px; border-radius: 10px;
-  background: var(--card); border: 1px solid var(--line);
+/* tab bar */
+#tabbar {
+  grid-column: 2;
+  display: flex; align-items: center; gap: 4px;
 }
-.q-clock.urgent { color: var(--warn); }
-.q-clock.word { font-size: 18px; letter-spacing: 0.2em; color: var(--tx-dim); }
-.q-btn { min-width: 86px; }
-.q-goal {
-  display: flex; flex-direction: column; align-items: center; line-height: 1.1;
-  font-family: var(--num); font-weight: 700; letter-spacing: 0.12em;
-  padding: 7px 16px;
-  background: var(--goal-c, #D6152C);
-  color: var(--goal-ink, #fff);
-  border: none;
+.tab-btn {
+  appearance: none; border: none; cursor: pointer;
+  background: transparent; color: var(--tx-dim);
+  font-family: inherit; font-size: 14px; font-weight: 600;
+  padding: 8px 24px; border-radius: 10px;
+  transition: background 0.15s, color 0.15s;
+  user-select: none; touch-action: manipulation;
 }
-.q-goal small { font-size: 10px; font-weight: 600; opacity: 0.85; letter-spacing: 0.14em; }
-.q-goal:active { transform: scale(0.96); }
+.tab-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--tx); }
+.tab-btn.active { background: var(--accent-2); color: #fff; }
+
+/* 窄螢幕：品牌讓位，分頁列自行佔滿整列（仍是一行按鈕） */
+@media (max-width: 640px) {
+  .topbar-row { grid-template-columns: 1fr; justify-items: center; gap: 6px; }
+  #tabbar { grid-column: 1; }
+  .brand-name { display: none; }
+  .tab-btn { padding: 8px 16px; }
+}
 
 /* ------------------------------------------------------------ layout */
 main {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);
-  gap: 18px;
-  padding: 18px;
-  max-width: 1600px;
+  padding: 14px 16px;
+  max-width: 1720px;
   margin: 0 auto;
 }
-.col { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.col-side { position: sticky; top: 74px; align-self: start; }
+.tab-page { display: none; }
+.tab-page.active { display: block; }
+
+/* 比賽分頁：密集網格 + 預覽側欄 */
+#tab-live.active {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
+  gap: var(--card-gap);
+  align-items: start;
+}
+/* top = 單列 topbar 高度(≈53px)+1px 框線+main 的 14px padding，貼齊網格頂端 */
+.live-side { position: sticky; top: 68px; min-width: 0; display: flex; flex-direction: column; gap: var(--card-gap); }
+
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--card-gap);
+  min-width: 0;
+}
+.live-grid .span2 { grid-column: 1 / -1; }
+
+/* 自動化／設定分頁 = 多欄密鋪。grid 會把同一列的卡片對齊到最高者，矮卡下方留下
+ * 大片空隙；multi-column 依實際高度往下填滿，卡片以 break-inside 保持完整。
+ * 欄數由欄寬決定（最少 420px、最多 3 欄），寬螢幕自動鋪滿。 */
+.auto-grid, .setup-grid {
+  columns: 420px 3;
+  column-gap: var(--card-gap);
+}
+.auto-grid > *, .setup-grid > * {
+  break-inside: avoid;
+  margin-bottom: var(--card-gap);
+}
+/* 不參與分欄、要整列寬度的卡：對局管理（紀錄編輯器欄位多）與排在它下方的管理員設置。
+ * 欄尾的 margin-bottom 會在分欄斷點被截斷，跨欄卡因此會緊貼上方欄位 —— 間隔要由
+ * 跨欄卡自己的 margin-top 補回來。 */
+.setup-grid > .span-all { column-span: all; margin-top: var(--card-gap); }
+
 @media (max-width: 980px) {
-  main { grid-template-columns: 1fr; }
-  .col-side { position: static; order: -1; }
+  #tab-live.active { grid-template-columns: 1fr; }
+  .live-side { position: static; order: -1; }
+}
+@media (max-width: 720px) {
+  .auto-grid, .setup-grid { columns: 1; }
+  /* 手機單欄：DOM 順序本身已是 計時器→畫面與節次→資訊橫幅(含圖標)→底部橫幅，
+   * 不需要 order 覆寫；預覽＋比分（.live-side）在 980px already 移到最前。 */
+  .live-grid { grid-template-columns: 1fr; }
 }
 
 /* ------------------------------------------------------------ cards */
@@ -109,9 +158,13 @@ main {
   border: 1px solid var(--line);
   border-radius: 16px;
   padding: 16px;
-  display: flex; flex-direction: column; gap: 12px;
+  /* gap = 卡片內「條目之間」的距離。卡片「之間」的距離是 --card-gap，兩者互不相干 */
+  display: flex; flex-direction: column; gap: 3px;
+  min-width: 0;
 }
+.card.dense { padding: 12px; border-radius: 14px; }
 .card-title { font-weight: 700; font-size: 15px; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.card.dense .card-title { font-size: 14px; }
 .hint { font-weight: 400; font-size: 12px; color: var(--tx-dim); }
 
 .row { display: flex; align-items: center; gap: 8px; }
@@ -142,6 +195,7 @@ main {
 .btn.warn { background: #3A1520; border-color: rgba(239, 68, 68, 0.4); color: #FCA5A5; }
 .btn.warn.outline { background: transparent; }
 .btn.sm { padding: 7px 11px; font-size: 13px; }
+.btn.lg { padding: 12px 20px; font-size: 15px; font-weight: 600; }
 
 .in {
   background: #0E1015;
@@ -154,7 +208,7 @@ main {
   min-width: 0;
 }
 .in:focus { outline: none; border-color: var(--accent); }
-.in.slim { width: 110px; }
+.in.slim { width: 100px; }
 .in.sm-num { width: 64px; padding: 7px 8px; text-align: center; }
 input[type='number']::-webkit-inner-spin-button { opacity: 1; }
 
@@ -167,8 +221,20 @@ input[type='number']::-webkit-inner-spin-button { opacity: 1; }
   white-space: nowrap;
 }
 .seg-btn.active { background: var(--accent-2); color: #fff; font-weight: 600; }
-.seg.grow { display: flex; }
-.seg.grow .seg-btn { flex: 1; }
+/* 寬度不足時允許換行：flex-basis 0 本身永遠「裝得下」，min-width:max-content 把
+ * 假想主尺寸抬到內容寬，欄寬不夠時按鈕就會折到下一行（多行 seg），
+ * 同一行內仍由 flex:1 均分剩餘空間。 */
+.seg.grow { display: flex; flex-wrap: wrap; }
+.seg.grow .seg-btn { flex: 1; min-width: max-content; }
+/* once syncSegWidths() (admin.js) locks a row's seg to the narrowest sibling in
+ * the card, flex-basis leaves free space AFTER it (row's default justify is
+ * flex-start) — push it flush to the row's right edge instead, so every seg in
+ * the card lines up on the right (their left edges vary with each row's label
+ * width, but the CONTROLS themselves stay aligned, which reads as tidy).
+ * Scoped to `.row >` only: `#rosterGroupSeg` sits directly in a column-flex
+ * .card (no .row wrapper) where margin-left:auto means something else
+ * entirely (breaks its full-width stretch) — this selector correctly excludes it. */
+.row > .seg.grow { margin-left: auto; }
 
 /* chips */
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -181,72 +247,84 @@ input[type='number']::-webkit-inner-spin-button { opacity: 1; }
 .chip:hover { border-color: rgba(255, 255, 255, 0.25); }
 .chip.active { background: var(--accent-2); border-color: transparent; color: #fff; }
 
-/* switches */
+/* 開關 = 隱藏的 checkbox（狀態真身：refresh() 的 .checked 寫入與 change 監聽全部照舊）
+ * ＋ 一組 關閉/開啟 seg 當它的外觀，與面板其他 seg 完全同一套樣式。
+ * admin.js 的 syncToggleSegs() 與 seg 的 click 監聽負責兩者的雙向同步。 */
+.switch-input { display: none; }
 .switch-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 4px 0; cursor: pointer; font-size: 14px;
+  gap: 12px; font-size: 14px;
 }
-.switch-row.big { font-size: 15px; font-weight: 600; }
-.switch {
-  appearance: none; width: 46px; height: 26px; border-radius: 999px;
-  background: #2A2F3A; position: relative; cursor: pointer; flex: none;
-  transition: background 0.2s;
-}
-.switch::after {
-  content: ''; position: absolute; top: 3px; left: 3px;
-  width: 20px; height: 20px; border-radius: 50%; background: #fff;
-  transition: left 0.2s cubic-bezier(0.34, 1.4, 0.5, 1);
-}
-.switch:checked { background: var(--accent); }
-.switch:checked::after { left: 23px; }
+.seg-toggle { display: flex; flex: none; }
+.seg-toggle .seg-btn { flex: 1; }
+/* 關閉是一種狀態、不是強調——給它中性色，讓 開啟 的藍色成為唯一的高亮 */
+.seg-toggle .seg-btn[data-val='0'].active { background: #2A2F3A; color: var(--tx); }
 
 /* sliders */
 .slider-row { gap: 12px; }
 .slider-row .lbl b { color: var(--tx); font-family: var(--num); }
 input[type='range'] { flex: 1; accent-color: var(--accent); height: 26px; }
+/* same treatment as .row > .seg.grow, but PAGE-WIDE: syncSegWidths() (admin.js)
+ * locks every range in the panel to the narrowest one's natural width — sliders
+ * are spread one-per-card in places, so a per-card group would leave those at
+ * full width. flex-basis then frees space AFTER the control (the row justifies
+ * from the start), so push it flush to the row's right edge. */
+.row > input[type='range'] { margin-left: auto; }
 
 /* ------------------------------------------------------------ score */
-.score-grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: stretch; }
-.score-vs { align-self: center; font-family: var(--num); font-size: 30px; color: var(--tx-dim); }
+.score-grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; }
+.score-vs { align-self: center; font-family: var(--num); font-size: 26px; color: var(--tx-dim); }
 .score-side {
-  display: flex; flex-direction: column; align-items: center; gap: 8px;
-  background: var(--card-2); border: 1px solid var(--line); border-radius: 14px;
-  padding: 12px; position: relative; overflow: hidden;
+  display: flex; flex-direction: column; align-items: center; gap: 7px;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 12px;
+  padding: 10px; position: relative; overflow: hidden;
 }
+/* GOAL 下方的 ±1／設定列：欄寬不足時換行置中，不硬擠一行 */
+.score-side .row { flex-wrap: wrap; justify-content: center; }
 .score-side::before {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px;
   background: var(--tc, #888);
 }
 #sideA { --tc: var(--a-color); }
 #sideB { --tc: var(--b-color); }
-.score-team { font-family: var(--num); font-weight: 600; letter-spacing: 0.14em; font-size: 13px; color: var(--tx-dim); text-transform: uppercase; text-align: center; }
-.score-val { font-family: var(--num); font-weight: 700; font-size: 64px; line-height: 1; font-variant-numeric: tabular-nums; }
+.score-team { font-family: var(--num); font-weight: 600; letter-spacing: 0.14em; font-size: 12.5px; color: var(--tx-dim); text-transform: uppercase; text-align: center; }
+.score-val { font-family: var(--num); font-weight: 700; font-size: 46px; line-height: 1; font-variant-numeric: tabular-nums; }
 .goal-btn {
   width: 100%;
-  font-family: var(--num); font-weight: 700; font-size: 20px; letter-spacing: 0.22em; text-indent: 0.22em;
-  padding: 12px 0;
+  font-family: var(--num); font-weight: 700; font-size: 19px; letter-spacing: 0.22em; text-indent: 0.22em;
+  padding: 11px 0;
   background: var(--tc);
   color: var(--tc-ink, #fff);
-  border: none; border-radius: 12px;
+  border: none; border-radius: 10px;
 }
 .goal-btn:active { transform: scale(0.97); }
 
-/* ------------------------------------------------------------ banners */
-.seg-row { justify-content: center; }
-.banner-btns { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
-.banner-btns .bn {
-  font-family: var(--num); font-weight: 700; letter-spacing: 0.1em; font-size: 14px;
-  background: var(--bn); border: none; color: var(--bn-ink, #fff); padding: 12px 0;
+/* ---------------------------------------------------- event icon rows */
+.icon-row { display: flex; align-items: stretch; gap: 5px; }
+.icon-team {
+  flex: none; width: 64px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--num); font-weight: 700; font-size: 12.5px; letter-spacing: 0.08em;
+  border-radius: 9px;
+  background: var(--card-2); color: var(--tx);
+  overflow: hidden; white-space: nowrap;
 }
-.active-banners { display: flex; flex-direction: column; gap: 6px; }
+.icon-row .bn {
+  flex: 1; min-width: 0;
+  font-family: var(--num); font-weight: 700; letter-spacing: 0.06em; font-size: 12.5px;
+  background: var(--bn); border: none; color: var(--bn-ink, #fff);
+  padding: 10px 2px;
+  white-space: nowrap;
+}
+.active-banners { display: flex; flex-direction: column; gap: 5px; }
 .active-banners:empty::after {
-  content: '当前没有顯示中的横幅';
-  color: var(--tx-dim); font-size: 12.5px; text-align: center; padding: 4px;
+  content: '目前沒有顯示中的圖標';
+  color: var(--tx-dim); font-size: 12.5px; text-align: center; padding: 3px;
 }
 .ab-item {
   display: flex; align-items: center; gap: 10px;
   background: var(--card-2); border: 1px solid var(--line);
-  border-radius: 10px; padding: 7px 10px;
+  border-radius: 10px; padding: 6px 10px;
   font-size: 13px;
 }
 .ab-dot { width: 10px; height: 10px; border-radius: 3px; background: var(--dot, #E0132F); flex: none; }
@@ -259,21 +337,27 @@ input[type='range'] { flex: 1; accent-color: var(--accent); height: 26px; }
 }
 .ab-x:hover { background: rgba(255, 255, 255, 0.08); color: var(--tx); }
 
-.adv summary { cursor: pointer; color: var(--tx-dim); font-size: 12.5px; }
-
 /* ------------------------------------------------------- info banner card */
 .lbl-sub {
   font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em;
   color: var(--tx-dim);
-  margin: 2px 0 -2px;
+  margin: 0 0 6px;
 }
-.preset-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.ib-groups {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1240px) { .ib-groups { grid-template-columns: 1fr; } }
+.preset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 5px; }
 .preset-grid .pv {
   position: relative;
-  font-family: var(--num); font-weight: 700; letter-spacing: 0.05em; font-size: 12.5px;
-  padding: 9px 8px 9px 16px;
+  font-family: var(--num); font-weight: 700; letter-spacing: 0.04em; font-size: 12px;
+  padding: 7px 6px 7px 14px;
   text-align: left;
   overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis;
 }
 .preset-grid .pv::before {
   content: '';
@@ -283,22 +367,47 @@ input[type='range'] { flex: 1; accent-color: var(--accent); height: 26px; }
 }
 .preset-grid .pv.active { outline: 1px solid var(--pv, #E0132F); }
 .ib-status {
-  background: var(--card-2); border: 1px solid var(--line); border-radius: 10px;
-  padding: 8px 12px;
-  font-size: 13px; color: var(--tx-dim);
+  margin-left: auto;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 3px 10px;
+  font-size: 12px; font-weight: 400; color: var(--tx-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
 }
 .ib-status.on { color: var(--tx); border-color: var(--ok, #0E9E64); }
-.ib-editor { display: flex; flex-direction: column; gap: 10px; }
+.ib-editor { display: flex; flex-direction: column; gap: 8px; }
+/* 暫停聯動的自動捲動目標：預留 sticky topbar 的高度，捲到位時卡片不被遮住 */
+#cardInfoBanner { scroll-margin-top: 74px; }
 .ib-cat-badge {
   flex: none;
   display: inline-flex; align-items: center;
-  padding: 0 12px;
+  padding: 0 12px; min-height: 36px;
   border-radius: 8px;
   font-family: var(--num); font-weight: 800; letter-spacing: 0.08em; font-size: 12.5px;
   background: #E0132F; color: #fff;
 }
 .ib-cat-badge.ctl { background: #2F6FED; }
-.ib-body-in { resize: vertical; min-height: 54px; font-size: 14px; line-height: 1.5; }
+.ib-body-in { resize: vertical; min-height: 38px; font-size: 14px; line-height: 1.4; }
+/* 球隊／球員下拉：每則預設自行宣告是否適用，不適用者清空並停用 */
+.ib-sel { flex: 1 1 140px; min-width: 120px; cursor: pointer; }
+.in:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* 事件圖標：現為資訊橫幅卡片底部的可展開摘要（原獨立卡片已併入） */
+.ib-icons { margin-top: 2px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ib-icons summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 700; font-size: 14px;
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+}
+.ib-icons summary::-webkit-details-marker { display: none; }
+.ib-icons summary::before {
+  content: '▸';
+  flex: none;
+  color: var(--tx-dim);
+  transition: transform 0.15s ease;
+}
+.ib-icons[open] summary::before { transform: rotate(90deg); }
+.ib-icons-body { display: flex; flex-direction: column; gap: 9px; margin-top: 9px; }
 
 /* ------------------------------------------------------- bottom banner card */
 .bb-picker { display: flex; flex-direction: column; gap: 8px; }
@@ -329,7 +438,18 @@ input[type='range'] { flex: 1; accent-color: var(--accent); height: 26px; }
 .bbp-thumb { flex: none; width: 30px; height: 30px; object-fit: contain; background: #fff; border-radius: 6px; padding: 2px; }
 .bbp-empty { color: var(--tx-dim); font-size: 12.5px; padding: 2px 0; }
 
-.org-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+/* bottom-banner sequence editor */
+.bb-seq-editor summary { cursor: pointer; color: var(--tx-dim); font-size: 12.5px; }
+.bb-seq-editor .seq-row-top { margin-top: 8px; }
+.bb-seq-editor .seq-loop { margin-left: auto; padding: 0; }
+.bbseq-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.bbseq-sub { flex: none; font-size: 11.5px; color: var(--tx-dim); white-space: nowrap; }
+
+.org-list { display: flex; flex-direction: column; gap: 8px; }
+.org-list:empty::after {
+  content: '資料夾 public/assets/banner 內沒有圖片';
+  color: var(--tx-dim); font-size: 12.5px;
+}
 .org-row {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   background: var(--card-2); border: 1px solid var(--line); border-radius: 10px;
@@ -377,26 +497,36 @@ input[type='range'] { flex: 1; accent-color: var(--accent); height: 26px; }
 
 /* ------------------------------------------------------------ timer */
 .timer-readout {
-  display: flex; align-items: baseline; justify-content: center; gap: 14px;
-  background: var(--card-2); border: 1px solid var(--line); border-radius: 14px;
-  padding: 10px 32px;
+  display: flex; align-items: baseline; justify-content: center; gap: 10px;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 12px;
+  padding: 6px 16px;
+  min-width: 0; overflow: hidden;
 }
-#cardTimer { padding: 16px 24px; }
 #timerBig {
-  font-family: var(--num); font-weight: 600; font-size: 56px; line-height: 1.1;
+  font-family: var(--num); font-weight: 600; font-size: 36px; line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
 #timerBig.urgent { color: var(--warn); }
 #timerBig.critical { color: var(--bad); }
-.timer-word { font-family: var(--num); font-weight: 400; font-size: 20px; color: var(--tx-dim); }
-.timer-dur { font-family: var(--num); font-weight: 600; font-size: 56px; color: var(--tx-dim); }
-.timer-readout:has(.timer-word:empty) .timer-dur { margin-left: 4px; }
+.timer-word { font-family: var(--num); font-weight: 400; font-size: 16px; color: var(--tx-dim); }
+.timer-dur { font-family: var(--num); font-weight: 600; font-size: 20px; color: var(--tx-dim); }
 .adjust-row { flex-wrap: wrap; }
-.adjust-row .btn { flex: 1; min-width: 62px; font-family: var(--num); font-variant-numeric: tabular-nums; }
+.adjust-row .btn { flex: 1; min-width: 56px; font-family: var(--num); font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------- 底部橫幅序列 list rows */
+.seq-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px; padding: 3px 4px;
+  border-radius: 10px;
+}
+.seq-row.current { outline: 1px solid rgba(34, 197, 94, 0.5); background: rgba(34, 197, 94, 0.06); }
+.seq-num { flex: none; width: 20px; text-align: center; font-family: var(--num); color: var(--tx-dim); }
+.seq-row.current .seq-num { color: var(--ok); }
 
 /* ------------------------------------------------------------ teams */
-.teams-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-@media (max-width: 640px) { .teams-grid { grid-template-columns: 1fr; } }
+/* auto-fit, not a viewport media query: inside a密鋪 column the card can be much
+ * narrower than the viewport, so the two team forms must collapse on container width */
+.teams-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
 .team-form {
   background: var(--card-2); border: 1px solid var(--line); border-radius: 14px;
   padding: 12px; display: flex; flex-direction: column; gap: 10px;
@@ -428,11 +558,12 @@ input[type='color'] {
   margin: 8px 0 6px;
 }
 .rs-title .btn { margin-left: auto; }
+.rs-award-dot { flex: none; width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(255, 255, 255, 0.25); }
 .r-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .r-row .in { padding: 7px 10px; font-size: 13.5px; }
 .r-row .r-num { width: 54px; text-align: center; }
 .r-row .r-pos { width: 74px; }
-.r-row .r-title { width: 112px; }
+.r-row .r-title { width: 140px; }   /* 職稱 up to 50 chars — scrolls within */
 .r-x {
   appearance: none; border: none; background: transparent; color: var(--tx-dim);
   font-size: 15px; cursor: pointer; padding: 4px 7px; border-radius: 6px; flex: none;
@@ -513,29 +644,96 @@ select.in { background: #0E1015; }
 .le-f-text { flex: 1; min-width: 90px; }
 .log-empty { color: var(--tx-dim); font-size: 12.5px; text-align: center; padding: 8px; }
 
+/* ------------------------------------------------------ 快捷鍵 card */
+/* 跨欄卡，內部再切成響應式多欄，40 條綁定才不會排成一長條 */
+.hk-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px 22px; align-items: start; }
+.hk-group { display: flex; flex-direction: column; gap: 3px; break-inside: avoid; }
+.hk-group-title {
+  font-size: 12.5px; font-weight: 700; letter-spacing: 0.08em;
+  color: var(--tx-dim); margin: 6px 0 3px;
+}
+.hk-row { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.hk-label { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk-key {
+  flex: none; min-width: 66px; text-align: center;
+  font-family: var(--num); font-weight: 600; font-size: 12.5px; letter-spacing: 0.04em;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 7px;
+  padding: 3px 9px; color: var(--tx); white-space: nowrap;
+}
+.hk-key.empty { color: var(--tx-dim); font-family: var(--ui); font-weight: 400; letter-spacing: 0; }
+.hk-row.rec .hk-key { color: var(--warn); border-color: var(--warn); }
+.hk-row.clash .hk-key { color: var(--bad); border-color: var(--bad); }
+.hk-set, .hk-clear {
+  flex: none; appearance: none; cursor: pointer;
+  background: transparent; border: 1px solid var(--line); border-radius: 7px;
+  color: var(--tx-dim); font-family: inherit; font-size: 12px; padding: 4px 9px;
+  transition: border-color 0.15s, color 0.15s;
+}
+.hk-set:hover, .hk-clear:hover { border-color: rgba(255, 255, 255, 0.25); color: var(--tx); }
+.hk-row.rec .hk-set { border-color: var(--warn); color: var(--warn); }
+.hk-flash { flex: none; font-size: 11.5px; color: var(--bad); }
+
 /* ------------------------------------------------------------ misc */
 .danger .card-title { color: #FCA5A5; }
 .foot { color: var(--tx-dim); font-size: 12.5px; padding: 0 4px; }
 .foot code { background: var(--card); padding: 2px 7px; border-radius: 6px; color: var(--tx); user-select: all; }
-.foot kbd {
-  background: var(--card); border: 1px solid var(--line); border-bottom-width: 2px;
-  border-radius: 5px; padding: 1px 6px; font-family: inherit; font-size: 11.5px;
-}
 
 /* ------------------------------------------------------------ preview */
-.preview-card { padding-bottom: 12px; }
+/* the iframe IS the card now (no title bar) — same chrome as .card so it still
+ * reads as one of the panels, just entirely occupied by the live preview.
+ *
+ * Layers, bottom to top: .pv-grid (格線) → .pv-video (攝影機/直播流) → iframe.
+ * The iframe always loads a TRANSPARENT /overlay — byte-for-byte what OBS gets —
+ * so the background is purely admin-side chrome and switching it never reloads
+ * the overlay. Only one background layer is displayed at a time (data-bg). */
 .preview-frame {
   position: relative;
   aspect-ratio: 16 / 9;
-  border-radius: 12px;
+  border-radius: 16px;
   overflow: hidden;
   border: 1px solid var(--line);
   background: #0E1015;
 }
-.preview-frame iframe {
+.preview-frame[data-bg='dark'] { background: #17191E; }
+
+/* 1920×1080 圖層。fitPreview() 只寫 --pv-scale，格線與 iframe 共用它 —— 兩層
+ * 必須是同一個縮放，格線才會跟計分板在同一個座標系裡。 */
+.pv-layer {
   position: absolute; top: 0; left: 0;
   width: 1920px; height: 1080px;
-  border: none;
   transform-origin: top left;
-  pointer-events: none;
+  transform: scale(var(--pv-scale, 1));
 }
+.preview-frame iframe { border: none; pointer-events: none; }
+/* data-overlay=0：只看背景。用途是直播流本身已經內嵌 overlay（例如來源就是 OBS 合成
+ * 後的畫面），再疊一層就會出現兩份計分板。iframe 只是 display:none，文件仍活著 ——
+ * SSE 不斷線，重新開啟時 rAF 續跑、狀態自己補回來，不會重載。 */
+.preview-frame[data-overlay='0'] iframe { display: none; }
+
+/* 與 overlay.css 的 body.bg-pitch 同一組漸層，刻意重複一次：/overlay?bg=pitch 仍是
+ * 可用的手動網址，而預覽已經不靠它了（改用透明 overlay + 這層）。 */
+.pv-grid {
+  display: none;
+  background-size: 100px 100px;
+  background-position: center center;
+  background-image:
+    linear-gradient(to right, #464b54 3px, transparent 3px),
+    linear-gradient(to bottom, #464b54 3px, transparent 3px);
+}
+.preview-frame[data-bg='pitch'] .pv-grid { display: block; }
+
+/* 裁切填滿：與 OBS 裡把攝影機拉滿 16:9 的實際結果一致 */
+.pv-video {
+  display: none;
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+.preview-frame[data-bg='camera'] .pv-video,
+.preview-frame[data-bg='stream'] .pv-video { display: block; }
+
+/* 預覽背景卡：錯誤／提示行只在有話說時佔位 */
+#pvNote { margin: 2px 0 0; }
+#pvNote:empty { display: none; }
+#pvNote.bad { color: #FCA5A5; }

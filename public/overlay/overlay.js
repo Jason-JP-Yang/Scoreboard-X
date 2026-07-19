@@ -21,7 +21,7 @@
  * pops in alone, then the body slides out from behind it. Manual show / hide.
  */
 import { buildPalette, facetSVG, hexToRgba, relLuminance } from '/shared/palette.js';
-import { connect, serverNow } from '/shared/net.js';
+import { connect, act, serverNow } from '/shared/net.js';
 
 /* ================================================================ dom */
 
@@ -599,24 +599,12 @@ function swapMainNamesMorph() {
   }
 }
 
-/* underlying (non-blinking) condition for the BREAK / PAUSE / END words —
- * used for the auto full-frame rule so alternate-blink doesn't flap tiers */
-function wordConditionActive(s) {
-  const t = s.timer;
-  if (t.mode === 'break' || t.mode === 'pause' || t.mode === 'matchEnd') return true;
-  if (t.autoPauseWord && !t.running) {
-    const r = timerRemaining(t);
-    if (r > 0 && r < t.durationMs) return true;
-  }
-  return false;
-}
-
+/* 2026-07-17: the old display-side auto full-frame (board.autoExpandBreak +
+ * wordConditionActive) is gone — the server's 計時聯動 automation now switches
+ * board.tier itself (and restores it on resume), so the tier is always literal. */
 function effTier() {
   if (!st) return 'off';
-  const t = st.board.tier;
-  if (t === 'off') return 'off';
-  if (st.board.autoExpandBreak && wordConditionActive(st)) return 'full';
-  return t;   // small | large | full (goal expansion is per-row, not a tier change)
+  return st.board.tier;   // off | small | large | full (goal expansion is per-row, not a tier change)
 }
 
 /* ---- per-row modes (item 4: a goal can expand only the scoring team's row) -------- */
@@ -1338,6 +1326,21 @@ function suspStr(ms) {
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
 }
 
+/* team-timeout countdown = REAL time (the match clock is stopped during a
+ * timeout anyway); shown only while automation.timeoutCountdown is enabled. */
+const TOUT_MS = 60000;
+function toutLeftMs(b) {
+  const t = b.tout;
+  if (!t) return 0;
+  return Math.max(0, Math.min(TOUT_MS, Number(t.endsAt) - serverNow()));
+}
+/* remaining ms for any countdown-bearing icon (null = this icon has none) */
+function iconLeftMs(b) {
+  if (b.type === 'SUSP2') return suspLeftMs(b);
+  if (b.type === 'TIMEOUT' && b.tout) return toutLeftMs(b);
+  return null;
+}
+
 function iconWrapEl(b) {
   const meta = ICON_META[b.type] || ICON_META.FOUL;
   const wrap = el('div', 'evicon-wrap');
@@ -1348,8 +1351,13 @@ function iconWrapEl(b) {
   if (b.type === 'SUSP2') {
     const host = el('span', 'evicon-timer');
     lw.append(host);
-    wrap.suspTape = new Tape(host);
-    wrap.suspTape.set(suspStr(suspLeftMs(b)), { anim: false });
+    wrap.cdTape = new Tape(host);
+    wrap.cdTape.set(suspStr(suspLeftMs(b)), { anim: false });
+  } else if (b.type === 'TIMEOUT' && b.tout && st && st.automation && st.automation.timeoutCountdown) {
+    const host = el('span', 'evicon-timer');
+    lw.append(host);
+    wrap.cdTape = new Tape(host);
+    wrap.cdTape.set(suspStr(toutLeftMs(b)), { anim: false });
   } else {
     lw.append(el('span', 'evicon-label', meta.label));
   }
@@ -1362,9 +1370,9 @@ function iconWrapEl(b) {
 function enterIcon(wrap, b, { instant = false } = {}) {
   const rail = rails[b.team === 'B' ? 'B' : 'A'];
   rail.append(wrap);
-  if (b.type === 'SUSP2') {
+  if (wrap.cdTape) {
     // the countdown IS the label: it stays open until it hits 0:00
-    if (suspLeftMs(b) <= 0) suspFinish(wrap, { instant: true });
+    if ((iconLeftMs(b) ?? 0) <= 0) suspFinish(wrap, { instant: true });
   } else if (serverNow() - b.createdAt >= LABEL_PHASE_MS) {
     wrap.dataset.collapsed = '1';
     toggleCell(wrap.querySelector('.evicon-labelwrap'), false, 'x', { instant: true });
@@ -1428,10 +1436,10 @@ function updateIconPhases() {
   for (const b of st.banners) {
     const wrap = iconEls.get(b.id);
     if (!wrap) continue;
-    if (b.type === 'SUSP2') {
+    if (wrap.cdTape) {   // SUSP2 always; TIMEOUT when the countdown automation is on
       if (wrap.dataset.done) continue;
-      const left = suspLeftMs(b);
-      if (wrap.suspTape) wrap.suspTape.set(suspStr(left), { dir: -1, anim: mainV.visible });
+      const left = iconLeftMs(b) ?? 0;
+      wrap.cdTape.set(suspStr(left), { dir: -1, anim: mainV.visible });
       if (left <= 0) suspFinish(wrap);
       continue;
     }
@@ -1700,12 +1708,28 @@ function trackInfoBar() {
   const stripW = ibStrip.offsetWidth;
   if (!stripW) return;
   const boardActive = !boardEl.classList.contains('is-hidden');
-  const target = boardActive ? boardClearShift(stripW) : 0;
 
-  /* width cap — keep the strip clear of the corner logos. The cap keeps the strip's
-   * right edge (after the centring shift) left of the zone; the smoothing comes from
-   * the zone / board animating, tracked per frame. */
-  ibSetWidth(Math.max(360, Math.min(1240, 2 * (ibRightLimit() - target) - STAGE_W)));
+  /* Width cap — derived PURELY from the board + corner geometry, NEVER from the
+   * strip's own live width. When the board pushes the strip, its left edge pins at
+   * boardRight+26, so the fitting width is (rightLimit − boardRight − 26); otherwise
+   * the strip is centred and fits at (2·rightLimit − STAGE_W). Both are independent
+   * of stripW, so a wrapping body can no longer feed its width back into the cap.
+   * (The old form fed `target`, itself a function of stripW, into the cap — a
+   * stripW→target→maxWidth→stripW loop that oscillated a long banner between its
+   * 1-line and 2-line widths, but only while a small→large morph slid boardRight
+   * through the sensitive band — the flicker Jason saw on TEAM TIME-OUT.) */
+  const rightLimit = ibRightLimit();
+  let cap = 2 * rightLimit - STAGE_W;
+  if (boardActive) {
+    const stageRect = stage.getBoundingClientRect();
+    const boardRight = (boardEl.getBoundingClientRect().right - stageRect.left) / stageScale;
+    cap = Math.min(cap, rightLimit - (boardRight + 26));
+  }
+  ibSetWidth(Math.max(360, Math.min(1240, cap)));
+
+  /* the cap is stable now, so the strip width is stable too — the centring shift
+   * can read it safely (translateX never feeds back into layout width). */
+  const target = boardActive ? boardClearShift(stripW) : 0;
 
   // board just appeared / disappeared -> ease from the held position to the new one
   if (ibBoardWasActive !== null && boardActive !== ibBoardWasActive) {
@@ -2200,8 +2224,24 @@ function rosterShowDelay(t) {
   return d;
 }
 
+/* auto-flip support: the server owns the page counter but cannot know the page
+ * COUNT (pagination is pure layout — fonts, canvas metrics live here). Report
+ * our computed total whenever it changes; the server wraps its auto-flip on it. */
+let lastReportedPages = 0;
+function reportRosterPages() {
+  const mode = (st.rosterDisplay && st.rosterDisplay.mode) || 'off';
+  if (mode === 'off') return;
+  let pages = 1;
+  if (mode === 'A' || mode === 'both') pages = Math.max(pages, rosterPages('A'));
+  if (mode === 'B' || mode === 'both') pages = Math.max(pages, rosterPages('B'));
+  if (pages === lastReportedPages) return;
+  lastReportedPages = pages;
+  act('roster.pagecount', { count: pages });
+}
+
 function updateRosters({ instant = false } = {}) {
   if (!st) return;
+  reportRosterPages();
   for (const t of ['A', 'B']) {
     const r = rosterEls[t];
     const want = rosterWantVisible(t);
@@ -2256,8 +2296,14 @@ const bbSubEl = bottombar.querySelector('.bb-sub');
 
 const BB_ROLE_LABEL = {
   LEADER: '領隊', COACH: '教練', STAFF: '工作人員', PLAYER: '球員',
-  COMMENTATOR: '評論員', REFEREE: '裁判',
+  COMMENTATOR: '評論員', REFEREE: '裁判', VIP: '主禮嘉賓', GUEST: '嘉賓',
+  CHAMPION: '冠軍', RUNNER_UP: '亞軍', THIRD: '季軍', FOURTH: '殿軍',
   HOST: '主辦單位', SUPPORT: '支持及指導單位', FUNDER: '資助機構',
+};
+/* 名次卡的底色（隊伍名稱為主字，小標題＝[名次  組別]）：金／銀／銅／淺綠。
+ * 走 buildPalette 生成整套 facet，isLight 自動決定墨色。 */
+const BB_AWARD_COLOR = {
+  CHAMPION: '#E6B325', RUNNER_UP: '#BCC3CE', THIRD: '#C67B3C', FOURTH: '#93CE9E',
 };
 /* hand-tuned near-white palette for event officials — buildPalette('#FFFFFF') greys
  * out (its lightness clamp), so the "white theme" facets get explicit tones instead */
@@ -2285,24 +2331,60 @@ function bbFit() {
   }
 }
 
+/* sub-line = [隊伍  位置  職稱], two-space feel via flex gap (Jason: 不要破折號).
+ * person: TEAM NAME · role label · number chip (player, styled) or pos / title;
+ * official: role label · title; org: its free-text position verbatim. */
+function bbSetSub(bb) {
+  bbSubEl.innerHTML = '';
+  const roleLabel = bb.kind === 'org' ? (bb.role || '') : (BB_ROLE_LABEL[bb.role] || bb.role || '');
+  const addText = t => {
+    const s = String(t ?? '').trim();
+    if (!s) return;
+    const el = document.createElement('span');
+    el.className = 'bb-part';
+    el.textContent = s;
+    bbSubEl.append(el);
+  };
+  if (bb.kind === 'person') {
+    addText((bb.teamName || '').toUpperCase());
+    addText(roleLabel);
+    if (bb.role === 'PLAYER' && String(bb.num || '').trim()) {
+      const chip = document.createElement('span');
+      chip.className = 'bb-num';
+      chip.textContent = String(bb.num).trim();   // player-number styling (team-inverted block)
+      bbSubEl.append(chip);
+    } else {
+      addText(bb.pos || bb.title);   // non-numbered: position, else title
+    }
+  } else if (bb.kind === 'official') {
+    addText(roleLabel);
+    addText(bb.title);
+  } else {
+    addText(roleLabel);   // org position (free text)
+  }
+  bbSubEl.style.display = bbSubEl.childElementCount ? '' : 'none';
+}
+
 function bbSetContent(bb) {
-  // person / official roles are codes -> map to 繁中; an organisation's position is
-  // free admin text (may be empty) -> shown verbatim
-  const label = bb.kind === 'org' ? (bb.role || '') : (BB_ROLE_LABEL[bb.role] || bb.role || '');
   bbNameEl.textContent = bb.name || '';
-  bbSubEl.textContent = bb.kind === 'person'
-    ? ((bb.teamName || '').toUpperCase() + (label ? '——' + label : ''))
-    : label;
-  bbSubEl.style.display = label ? '' : 'none';
+  bbSetSub(bb);
   bbCard.classList.toggle('bb-org', bb.kind === 'org');
-  // org uses the SAME white facet theme as an official; its CSS overlay then dissolves
-  // the left (icon) side to pure white
-  const pal = bb.kind === 'person' ? buildPalette(bb.color || '#D6152C') : BB_WHITE_PAL;
+  // person -> team palette; a placing official -> its medal palette; every other
+  // official + org -> the white facet (org's CSS overlay then whites out the icon side)
+  const pal = bb.kind === 'person'
+    ? buildPalette(bb.color || '#D6152C')
+    : (bb.kind === 'official' && BB_AWARD_COLOR[bb.role])
+      ? buildPalette(BB_AWARD_COLOR[bb.role])
+      : BB_WHITE_PAL;
   bbBg.innerHTML = facetSVG(pal, {});
   const light = pal.isLight;
   bbCard.classList.toggle('bb-light', light);
   bbCard.style.setProperty('--bb-ink', pal.ink);
   bbCard.style.setProperty('--bb-ink-dim', light ? 'rgba(13,15,19,0.66)' : 'rgba(255,255,255,0.74)');
+  // number chip inverts the facet so it reads on the team-coloured card: ink block,
+  // opposite-of-ink digits (dark facet -> light chip/dark digits, and vice versa)
+  bbCard.style.setProperty('--bb-num-bg', pal.ink);
+  bbCard.style.setProperty('--bb-num-tx', light ? '#FFFFFF' : '#0D0F13');
   if (bb.kind === 'org' && bb.file) {
     bbImg.src = '/assets/banner/' + encodeURIComponent(bb.file);
     bbIconWrap.classList.remove('bb-noicon');

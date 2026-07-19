@@ -5,7 +5,6 @@ import { buildPalette, relLuminance } from '/shared/palette.js';
 
 const $ = id => document.getElementById(id);
 let st = null;
-let bannerTeam = 'A';
 let lastTier = 'large';   // for the B shortcut: off <-> last shown tier
 
 const patch = p => act('patch', { patch: p });
@@ -35,25 +34,6 @@ function fmtClock(ms, direction) {
   }
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}.${pCs}`;
-}
-function fmtClockShort(ms, direction) {
-  ms = Math.max(0, ms);
-  const ds = Math.floor(ms / 100) % 10;
-  if (direction === 'up') {
-    const s = Math.floor(ms / 1000);
-    const min = Math.floor(s / 60);
-    const sec = s % 60;
-    const pMin = (min === 0 && sec === 0) ? '00' : String(min);
-    const pSec = String(sec).padStart(2, '0');
-    return `${pMin}:${pSec}.${ds}`;
-  }
-  if (ms < 10000) return `${Math.floor(ms / 1000)}.${ds}`;
-  if (ms < 60000) {
-    const s = Math.floor(ms / 1000);
-    return `0:${String(s).padStart(2, '0')}.${ds}`;
-  }
-  const s = Math.floor(ms / 1000);
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}.${ds}`;
 }
 function parseTime(str) {
   str = String(str || '').trim();
@@ -112,6 +92,14 @@ const BANNER_META = {
   MEDICAL: { label: '醫療',    color: '#0FA3B1' },
 };
 
+/* roster role labels — shared by the info-banner player picker, the bottom-banner
+ * picker and its sequence list, so it must be declared above all of them */
+const BB_ROLE_LABEL = {
+  LEADER: '領隊', COACH: '教練', STAFF: '工作人員', PLAYER: '球員',
+  COMMENTATOR: '評論員', REFEREE: '裁判', VIP: '主禮嘉賓', GUEST: '嘉賓',
+  CHAMPION: '冠軍', RUNNER_UP: '亞軍', THIRD: '季軍', FOURTH: '殿軍',
+};
+
 /* ---------------------------------------------------------- refresh */
 
 function paintPal(team, hex) {
@@ -132,26 +120,41 @@ function renderActiveBanners(s) {
     const meta = BANNER_META[b.type] || BANNER_META.FOUL;
     const item = document.createElement('div');
     item.className = 'ab-item';
-    const susp = b.type === 'SUSP2' && b.susp
-      ? ` data-msleft="${Number(b.susp.msLeft) || 0}" data-ref="${Number(b.susp.refEpoch) || 0}" data-running="${b.susp.running ? 1 : 0}"`
-      : '';
+    let cd = '';
+    if (b.type === 'SUSP2' && b.susp) {
+      cd = ` data-msleft="${Number(b.susp.msLeft) || 0}" data-ref="${Number(b.susp.refEpoch) || 0}" data-running="${b.susp.running ? 1 : 0}"`;
+    } else if (b.type === 'TIMEOUT' && b.tout && s.automation && s.automation.timeoutCountdown) {
+      cd = ` data-endsat="${Number(b.tout.endsAt) || 0}"`;
+    }
     item.innerHTML = `
       <span class="ab-dot" style="--dot:${meta.color}"></span>
       <span class="ab-team">${(s.teams[b.team].short || '').toUpperCase()}</span>
       <span class="ab-label">${meta.label}</span>
-      <span class="ab-count"${susp}></span>
+      <span class="ab-count"${cd}></span>
       <button class="ab-x" title="移除">✕</button>`;
     item.querySelector('.ab-x').addEventListener('click', () => act('banner.hide', { id: b.id }));
     host.append(item);
   }
 }
 
+/* Conditional slider rows (展開持續 / 自動隱藏秒數 / 翻頁秒數) start hidden, so the
+ * width lock measured them at 0 and skipped them — a row revealed later would sit
+ * at full width beside the locked ones. Re-sync only when one actually flips:
+ * doing it on every sync would be a layout read per action, and it would fight a
+ * slider mid-drag (release → re-measure → re-lock, 6×/sec while dragging). */
+let sliderRowsDirty = false;
+function showSliderRow(id, on) {
+  const el = $(id);
+  const next = on ? '' : 'none';
+  if (el.style.display === next) return;
+  el.style.display = next;
+  sliderRowsDirty = true;
+}
+
 function refresh(s) {
   st = s;
 
-  /* quick bar + score card */
-  $('qGoalAName').textContent = (s.teams.A.short || 'A').toUpperCase();
-  $('qGoalBName').textContent = (s.teams.B.short || 'B').toUpperCase();
+  /* score card */
   $('scoreNameA').textContent = s.teams.A.name;
   $('scoreNameB').textContent = s.teams.B.name;
   $('scoreValA').textContent = s.teams.A.score;
@@ -165,14 +168,19 @@ function refresh(s) {
     const ink = relLuminance(s.teams[t].color) > 0.42 ? '#0D0F13' : '#fff';
     const side = $(t === 'A' ? 'sideA' : 'sideB');
     side.style.setProperty('--tc-ink', ink);
-    const qg = $(t === 'A' ? 'qGoalA' : 'qGoalB');
-    qg.style.setProperty('--goal-c', s.teams[t].color);
-    qg.style.setProperty('--goal-ink', ink);
   }
 
-  /* banner card */
-  $('segTeamA').textContent = (s.teams.A.short || 'A').toUpperCase();
-  $('segTeamB').textContent = (s.teams.B.short || 'B').toUpperCase();
+  /* event icons — now a collapsible section inside 資訊橫幅; summary badge lets
+   * you see the live count without expanding it */
+  for (const t of ['A', 'B']) {
+    const chip = $('iconTeam' + t);
+    chip.textContent = (s.teams[t].short || t).toUpperCase();
+    chip.style.background = s.teams[t].color;
+    chip.style.color = relLuminance(s.teams[t].color) > 0.42 ? '#0D0F13' : '#fff';
+  }
+  const iconsStatus = $('iconsStatus');
+  iconsStatus.textContent = s.banners.length ? `${s.banners.length} 個顯示中` : '尚無圖標';
+  iconsStatus.classList.toggle('on', !!s.banners.length);
   renderActiveBanners(s);
 
   /* info banner card */
@@ -182,19 +190,45 @@ function refresh(s) {
     ? `目前顯示：${ib.cat === 'CONTROL' ? 'MATCH CONTROL' : 'REFEREE'} · ${ib.title}`
     : '目前未顯示';
   ibs.classList.toggle('on', !!ib);
+  /* team dropdown labels follow the live short names (values A/B never change);
+   * each team option is painted in its own theme colour (ink by luminance) */
+  const optInk = c => relLuminance(c) > 0.42 ? '#0D0F13' : '#fff';
+  for (const t of ['A', 'B']) {
+    const o = $('ibTeamOpt' + t);
+    o.textContent = (s.teams[t].short || t).toUpperCase();
+    o.style.background = s.teams[t].color;
+    o.style.color = optInk(s.teams[t].color);
+  }
+  /* 勝方 is a VIRTUAL option — show which side it currently resolves to,
+   * themed to the resolved side (neutral while level) */
+  const wk = ibWinnerKey(s);
+  const wOpt = $('ibTeamOptWin');
+  wOpt.textContent = wk
+    ? `勝方 · ${(s.teams[wk].short || wk).toUpperCase()}`
+    : '勝方（目前平手）';
+  wOpt.style.background = wk ? s.teams[wk].color : '';
+  wOpt.style.color = wk ? optInk(s.teams[wk].color) : '';
+  /* 勝方 can change hands mid-match: the player list must follow the new team
+   * (it is keyed by the RESOLVED team, not by the 'WIN' select value) */
+  if (wk !== ibLastWinKey) {
+    ibLastWinKey = wk;
+    if ($('ibTeamSel').value === 'WIN' && document.activeElement !== $('ibPlayerSel')) {
+      ibFillPlayers();
+    }
+  }
+  ibRefreshComposed();   // FULL-TIME's wording tracks the live score
 
   /* timer card */
   const running = s.timer.running;
-  for (const b of [$('startPause'), $('qStartPause')]) {
+  {
+    const b = $('startPause');
     b.textContent = running ? '暫停' : '開始';
     b.classList.toggle('running', running);
-    b.classList.add('primary');
   }
   document.querySelectorAll('#modeSeg .seg-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.mode === s.timer.mode));
   $('autoPauseWord').checked = !!s.timer.autoPauseWord;
   $('pauseAlternate').checked = !!s.timer.pauseAlternate;
-  $('autoEndMode').checked = !!s.timer.autoEndMode;
   $('endAlternate').checked = !!s.timer.endAlternate;
   document.querySelectorAll('#timerDirSeg .seg-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.dir === s.timer.direction));
@@ -215,8 +249,7 @@ function refresh(s) {
   const goalEffect = s.board.goalEffect || 'full';
   document.querySelectorAll('#goalEffectSeg .seg-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.effect === goalEffect));
-  $('rowGoalSec').style.display = goalEffect === 'minimal' ? 'none' : '';
-  $('swAutoBreak').checked = !!s.board.autoExpandBreak;
+  showSliderRow('rowGoalSec', goalEffect !== 'minimal');
   $('swAmbient').checked = !!s.board.ambient;
   $('swClock').checked = s.board.clockVisible !== false;
   setVal($('goalSec'), s.board.goalExpandSec);
@@ -227,6 +260,58 @@ function refresh(s) {
   $('marginVal').textContent = s.board.margin;
   setVal($('driftSpeed'), s.board.driftSpeed);
   $('driftSpeedVal').textContent = Number(s.board.driftSpeed).toFixed(1);
+
+  /* automation cards */
+  const au = s.automation || {};
+  $('atTimeoutCountdown').checked = !!au.timeoutCountdown;
+  $('atTimeoutAutoPause').checked = !!au.timeoutAutoPause;
+  $('atTimeoutAutoRemove').checked = !!au.timeoutAutoRemove;
+  $('atSuspAutoRemove').checked = !!au.suspAutoRemove;
+  $('atSuspExpireBanner').checked = !!au.suspExpireBanner;
+  $('atIconBanner').checked = !!au.iconBanner;
+  /* 計時聯動 card */
+  $('atPausePreselect').checked = !!au.pausePreselect;
+  $('atPauseSeq').checked = !!au.pauseSeq;
+  $('atResumeClean').checked = !!au.resumeCleanup;
+  $('atHalfEndFlow').checked = !!au.halfEndFlow;
+  $('atHalfEndSeq').checked = !!au.halfEndSeq;
+  $('atHalftimeArm').checked = !!au.halftimeArm;
+  $('atMatchEndFlow').checked = !!au.matchEndFlow;
+  $('atMatchEndSeq').checked = !!au.matchEndSeq;
+  $('atMatchEndTie').checked = !!au.matchEndTieSuppress;
+  $('atEndHidePeriod').checked = !!au.endHidePeriod;
+  $('atLast30').checked = !!au.last30Banner;
+  $('atTimeCalib').checked = !!au.timeCalibBanner;
+  for (const [segId, boardKey] of AUTO_BOARD_SEGS) {
+    document.querySelectorAll('#' + segId + ' .seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.bd === (au[boardKey] || 'off')));
+  }
+  /* 資訊橫幅聯動 card */
+  $('atInfoIcon').checked = !!au.infoIcon;
+  $('atInfoToPause').checked = !!au.infoTimeoutPause;
+  $('atInfoToResume').checked = !!au.infoTimeoutResume;
+  $('atInfoMedPause').checked = !!au.infoMedicalPause;
+  /* 暫停聯動（pausePreselect）：running true→false 且仍在比賽中段（mode 還是
+   * clock、剩餘 > 0）＝一次暫停。捲動只能在 client 做，所以偵測放這裡；每個開著
+   * 的 admin 頁都會各自預選＋捲動。 */
+  const runNow = !!s.timer.running;
+  if (lastRunSeen === true && !runNow && au.pausePreselect
+      && s.timer.mode === 'clock' && timerRemaining(s.timer) > 0) {
+    ibAutoPreselectTimeout();
+  }
+  lastRunSeen = runNow;
+  $('atInfoAutoHide').checked = !!au.infoAutoHide;
+  setVal($('atInfoSec'), au.infoAutoHideSec ?? 12);
+  $('atInfoSecVal').textContent = au.infoAutoHideSec ?? 12;
+  showSliderRow('rowAtInfoSec', !!au.infoAutoHide);
+  $('atBottomAutoHide').checked = !!au.bottomAutoHide;
+  setVal($('atBottomSec'), au.bottomAutoHideSec ?? 12);
+  $('atBottomSecVal').textContent = au.bottomAutoHideSec ?? 12;
+  showSliderRow('rowAtBottomSec', !!au.bottomAutoHide);
+  $('atRosterFlip').checked = !!au.rosterAutoFlip;
+  setVal($('atRosterSec'), au.rosterAutoFlipSec ?? 8);
+  $('atRosterSecVal').textContent = au.rosterAutoFlipSec ?? 8;
+  showSliderRow('rowAtRosterSec', !!au.rosterAutoFlip);
 
   /* info card */
   $('swEvent').checked = !!s.event.visible;
@@ -261,7 +346,13 @@ function refresh(s) {
   $('rPagePrev').disabled = rCur <= 0;
   $('rPageNext').disabled = rCur >= rTotal - 1;
   const rj = JSON.stringify(s.roster);
-  if (rj !== lastRosterJson) { lastRosterJson = rj; renderRosterEditor(); }
+  if (rj !== lastRosterJson) {
+    lastRosterJson = rj;
+    renderRosterEditor();
+    // the info-banner player list is drawn from the roster; keep it fresh, but
+    // never rebuild the options out from under an open dropdown
+    if (document.activeElement !== $('ibPlayerSel')) ibFillPlayers();
+  }
 
   /* bottom banner + corner logo cards */
   const bb = s.bottomBanner;
@@ -273,15 +364,26 @@ function refresh(s) {
     bbs.textContent = '目前未顯示';
   }
   bbs.classList.toggle('on', !!bb);
+  /* bottom-banner sequence */
+  const seq = s.bbSeq || { items: [], intervalSec: 10, loop: false };
+  $('bbSeqLoop').checked = !!seq.loop;
+  setVal($('bbSeqSec'), seq.intervalSec ?? 10);
+  $('bbSeqSecVal').textContent = seq.intervalSec ?? 10;
+  $('bbSeqStatus').textContent = bbSeqRunInfo
+    ? `播放中 ${Math.min((bbSeqRunInfo.idx ?? 0) + 1, seq.items.length)} / ${seq.items.length}`
+    : (seq.items.length ? `序列共 ${seq.items.length} 項` : '序列是空的');
+  renderBbSeqList(s);
   renderBbPicker();
   renderOrgList();
   renderCornerGrid();
+  hkSyncFromState(s);   // keyboard shortcuts now live in server state
+  syncToggleSegs();   // every 開關 above wrote its hidden checkbox — paint the segs
+  if (sliderRowsDirty) { sliderRowsDirty = false; syncSegWidths(); }
 }
 
 /* would the overlay be suppressing the bottom banner right now? (status hint only) */
 function bbYielding(s) {
-  const autoFull = s.board.autoExpandBreak && !!clockWordFor(s);
-  const tier = autoFull ? 'full' : (s.board.tier || 'large');
+  const tier = s.board.tier || 'large';
   if (tier === 'full') return true;
   if (s.infoBanner) return false;                    // info banner hides the rosters anyway
   const mode = (s.rosterDisplay || {}).mode || 'off';
@@ -296,8 +398,6 @@ function bbYielding(s) {
 /* scores */
 $('goalA').addEventListener('click', () => act('goal', { team: 'A' }));
 $('goalB').addEventListener('click', () => act('goal', { team: 'B' }));
-$('qGoalA').addEventListener('click', () => act('goal', { team: 'A' }));
-$('qGoalB').addEventListener('click', () => act('goal', { team: 'B' }));
 $('plusA').addEventListener('click', () => act('score.adjust', { team: 'A', delta: 1 }));
 $('minusA').addEventListener('click', () => act('score.adjust', { team: 'A', delta: -1 }));
 $('plusB').addEventListener('click', () => act('score.adjust', { team: 'B', delta: 1 }));
@@ -312,85 +412,443 @@ $('goalDelta').addEventListener('change', e => {
   patch({ goalDelta: v });
 });
 
-/* banners */
-document.querySelectorAll('#bannerTeamSeg .seg-btn').forEach(b => {
-  b.addEventListener('click', () => {
-    bannerTeam = b.dataset.team;
-    document.querySelectorAll('#bannerTeamSeg .seg-btn').forEach(x => x.classList.toggle('active', x === b));
+/* event icons — one row per team, single click */
+document.querySelectorAll('.icon-row').forEach(row => {
+  const team = row.dataset.team;
+  row.querySelectorAll('.bn').forEach(b => {
+    b.addEventListener('click', () => act('banner.show', { team, bannerType: b.dataset.type }));
   });
-});
-document.querySelectorAll('.banner-btns .bn').forEach(b => {
-  b.addEventListener('click', () => act('banner.show', { team: bannerTeam, bannerType: b.dataset.type }));
 });
 $('clearBanners').addEventListener('click', () => act('banner.clear'));
 
-/* info banner — quick-fill presets: [key, cat, chip title, tone, fg, 觀眾解釋預填] */
+/* info banner — quick-fill presets. Complete IHF-rules library (31).
+ *
+ * ORDER MATTERS — buttons render in array order, so this list IS the on-screen
+ * layout. Each group is sorted into CONTIGUOUS COLOUR BLOCKS; the blocks run from
+ * most to least severe (red first) and entries inside a block run by in-match
+ * frequency. Sorting by frequency alone (the previous rule) scattered the tones
+ * and made the grid unscannable. Keep any new preset inside its colour's block.
+ *   REFEREE: 深紅 取消資格 → 紅 犯規判罰 → 藍 藍牌 → 橙 罰離 → 黃 警告 → 灰 中性重開 → 綠 解除
+ *   CONTROL: 橙 中斷 → 青 醫療 → 藍 流程 → 綠 正常進行
+ *
+ * Tones follow the shared colour language: foul red #E0132F / red card #C4001D /
+ * blue card #1E6ADB / susp orange #FF8A00 / warning yellow #F5C400 / neutral
+ * restart #57606E / control blue #2F6FED / positive green #0E9E64 / medical teal
+ * #0FA3B1 (dark ink on yellow/orange).
+ *
+ * Each entry declares whether the 球隊 / 球員 dropdowns apply to it (unusable ones
+ * are cleared + disabled) and owns a `body(t, p, c)` writer: t = team short name,
+ * p = player label (either possibly ''), c = live match facts from ibCtx()
+ * `{ a, b, diff, winner, key, hi, lo, lead, clock, left, period }`.
+ * Optional flags: `teamDefault` preselects a 球隊 on pick ('WIN' = 勝方) and `live`
+ * marks a writer whose text depends on c, so it re-composes on every sync
+ * (see ibRefreshComposed) — a late score correction can never leave stale text.
+ *
+ * Refinement policy (Jason 2026-07-17): SITUATIONAL presets (milestones, penalties
+ * with man-down consequences, timeouts, endgame) weave live score / time / margin
+ * tiers into their wording — like FULL-TIME; ROUTINE restarts (free throw, throw-in,
+ * goalkeeper throw, travel-type violations) stay as concise rule explanations with
+ * NO live data, to avoid viewer fatigue on high-frequency calls.
+ * The server mirrors several of these writers for automation-driven banners
+ * (AUTO_INFO in server.js) — keep the wording in sync when editing either side.
+ * The writer is NOT a string insert — every
+ * preset spells out its own sentence per case so the subject lands in the right
+ * slot with natural word order (e.g. FREE THROW takes the team as the RECIPIENT
+ * "判 NICE 自由球", while PASSIVE PLAY's team is the one that GETS the free throw
+ * and STEPS' team is the OFFENDER). */
 const IB_PRESETS = [
-  ['GOAL_DISALLOWED', 'REFEREE', 'GOAL DISALLOWED',    '#E0132F', '#FFFFFF', '球完全越線前已有犯規，此球不計分。'],
-  ['SEVEN_METRE',     'REFEREE', '7-METRE THROW',      '#E0132F', '#FFFFFF', '明顯得分機會遭犯規破壞，判罰七米球。'],
-  ['FREE_THROW',      'REFEREE', 'FREE THROW',         '#57606E', '#FFFFFF', '進攻方獲自由球，於犯規地點重新開球。'],
-  ['YELLOW_CARD',     'REFEREE', 'YELLOW CARD',        '#F5C400', '#15181E', '對違反運動精神或累犯行為的正式警告。'],
-  ['SUSP_2MIN',       'REFEREE', '2-MIN SUSPENSION',   '#FF8A00', '#15181E', '球員被罰離場兩分鐘，該隊將少一人應戰。'],
-  ['SUSP_EXPIRED',    'REFEREE', 'SUSPENSION EXPIRED', '#0E9E64', '#FFFFFF', '罰時結束，球員歸隊，恢復滿員應戰。'],
-  ['RED_CARD',        'REFEREE', 'RED CARD',           '#C4001D', '#FFFFFF', '取消比賽資格，該球員不得繼續參賽。'],
-  ['BLUE_CARD',       'REFEREE', 'BLUE CARD',          '#1E6ADB', '#FFFFFF', '取消資格並提交書面報告，賽後可能追加處分。'],
-  ['THROW_IN',        'REFEREE', 'THROW-IN',           '#57606E', '#FFFFFF', '球出邊線，由對方擲界外球恢復比賽。'],
-  ['GK_THROW',        'REFEREE', 'GK THROW',           '#57606E', '#FFFFFF', '球越底線，由守門員擲球門球恢復比賽。'],
-  ['THROW_OFF',       'CONTROL', 'THROW-OFF',          '#2F6FED', '#FFFFFF', '由中線開球，比賽開始。'],
-  ['TEAM_TIMEOUT',    'CONTROL', 'TEAM TIME-OUT',      '#0E9E64', '#FFFFFF', '球隊請求暫停，時長一分鐘。'],
-  ['MEDICAL_TIMEOUT', 'CONTROL', 'MEDICAL TIME-OUT',   '#0FA3B1', '#FFFFFF', '場上球員接受治療，比賽暫停。'],
-  ['HALF_TIME',       'CONTROL', 'HALF-TIME',          '#2F6FED', '#FFFFFF', '半場結束，中場休息。'],
-  ['PLAY_SUSPENDED',  'CONTROL', 'PLAY SUSPENDED',     '#FF8A00', '#15181E', '比賽暫時中斷，恢復時間另行通知。'],
-  ['RESUME',          'CONTROL', 'RESUME',             '#0E9E64', '#FFFFFF', '比賽即將恢復。'],
-  ['TIME_CALIBRATE',  'CONTROL', 'TIME-CALIBRATE',     '#2F6FED', '#FFFFFF', '正在校正官方比賽計時。'],
+  /* ==================== REFEREE 判罰 ==================== */
+  /* 深紅 #C4001D — 取消資格（最重） */
+  { key: 'RED_CARD', cat: 'REFEREE', title: 'RED CARD', tone: '#C4001D', fg: '#FFFFFF',
+    team: true, player: true, live: true,
+    body: (t, p, c) => {
+      const tail = `目前比分 ${c.a}:${c.b}，${t || '該隊'}將少一人應戰兩分鐘。`;
+      return p ? `${t} ${p} 被取消比賽資格，不得繼續參賽；${tail}`
+           : t ? `${t} 一名球員被取消比賽資格，不得繼續參賽；${tail}`
+               : `球員犯規並被取消比賽資格，不得繼續參賽；${tail}`;
+    } },
+  /* 紅 #E0132F — 犯規判罰 */
+  { key: 'FREE_THROW', cat: 'REFEREE', title: 'FREE THROW', tone: '#E0132F', fg: '#FFFFFF',
+    team: true, player: false,
+    body: t => t ? `因犯規判給 ${t} 自由球，於犯規地點重新開球。`
+                 : '因犯規判給進攻方自由球，於犯規地點重新開球。' },
+  { key: 'SEVEN_METRE', cat: 'REFEREE', title: '7-METRE THROW', tone: '#E0132F', fg: '#FFFFFF',
+    team: true, player: true, live: true,
+    body: (t, p, c) => {
+      const base = p ? `${t} ${p} 的明顯得分機會遭非法破壞，判罰七米球`
+                 : t ? `${t} 的明顯得分機會遭非法破壞，判罰七米球`
+                     : `明顯得分機會遭非法破壞，判罰七米球`;
+      return base + (c.diff <= 1 ? `；目前 ${c.a}:${c.b}，此球足以改寫戰局！`
+                                 : `；目前比分 ${c.a}:${c.b}。`);
+    } },
+  { key: 'GOAL_DISALLOWED', cat: 'REFEREE', title: 'GOAL DISALLOWED', tone: '#E0132F', fg: '#FFFFFF',
+    team: true, player: false, live: true,
+    body: (t, p, c) => t ? `${t} 此球不計分：球完全越線前已有犯規或哨聲；比分維持 ${c.a}:${c.b}。`
+                         : `球完全越線前已有犯規或哨聲，此球不計分；比分維持 ${c.a}:${c.b}。` },
+  { key: 'OFFENSIVE_FOUL', cat: 'REFEREE', title: 'OFFENSIVE FOUL', tone: '#E0132F', fg: '#FFFFFF',
+    team: true, player: true,
+    body: (t, p) => p ? `${t} ${p} 進攻犯規，球權轉換。`
+                 : t ? `${t} 進攻犯規，球權轉換。`
+                     : '進攻方犯規，球權轉換。' },
+  { key: 'PASSIVE_PLAY', cat: 'REFEREE', title: 'PASSIVE PLAY', tone: '#E0132F', fg: '#FFFFFF',
+    team: true, player: false,
+    body: t => t ? `消極比賽成立，判 ${t} 自由球。`
+                 : '消極比賽成立，判對方自由球。' },
+  { key: 'STEPS', cat: 'REFEREE', title: 'STEPS', tone: '#E0132F', fg: '#FFFFFF',
+    team: true, player: true,
+    body: (t, p) => p ? `${t} ${p} 帶球超過三步，判對方自由球。`
+                 : t ? `${t} 走步違例（帶球超過三步），判對方自由球。`
+                     : '走步違例（帶球超過三步），判對方自由球。' },
+  { key: 'DOUBLE_DRIBBLE', cat: 'REFEREE', title: 'DOUBLE DRIBBLE', tone: '#E0132F', fg: '#FFFFFF',
+    team: true, player: true,
+    body: (t, p) => p ? `${t} ${p} 二次運球違例，判對方自由球。`
+                 : t ? `${t} 二次運球違例，判對方自由球。`
+                     : '球員二次運球違例，判對方自由球。' },
+  { key: 'GOAL_AREA', cat: 'REFEREE', title: 'GOAL AREA VIOLATION', tone: '#E0132F', fg: '#FFFFFF',
+    team: true, player: true,
+    body: (t, p) => p ? `${t} ${p} 違例進入六米球門區，判守門員擲球或自由球。`
+                 : t ? `${t} 違例進入六米球門區，判守門員擲球或自由球。`
+                     : '違例進入六米球門區，判守門員擲球或自由球。' },
+  /* 藍 #1E6ADB — 取消資格＋書面報告 */
+  { key: 'BLUE_CARD', cat: 'REFEREE', title: 'BLUE CARD', tone: '#1E6ADB', fg: '#FFFFFF',
+    team: true, player: true, live: true,
+    body: (t, p, c) => {
+      const tail = `賽後將提交書面報告並可能追加處分；目前 ${c.a}:${c.b}，${t || '該隊'}減員兩分鐘。`;
+      return p ? `${t} ${p} 被出示藍牌取消資格，${tail}`
+           : t ? `${t} 一名球員被出示藍牌取消資格，${tail}`
+               : `球員被出示藍牌取消資格，${tail}`;
+    } },
+  /* 橙 #FF8A00 — 罰離減員 */
+  { key: 'SUSP_2MIN', cat: 'REFEREE', title: '2-MIN SUSPENSION', tone: '#FF8A00', fg: '#15181E',
+    team: true, player: true, live: true,
+    body: (t, p, c) => {
+      const who = p ? `${t} ${p} 被罰離場兩分鐘` : t ? `${t} 一名球員被罰離場兩分鐘` : `球員被罰離場兩分鐘`;
+      const tail = !c.winner ? `；目前 ${c.a}:${c.b} 平手，這兩分鐘的減員至關重要！`
+                 : c.diff <= 2 ? `；目前 ${c.a}:${c.b} 分差膠著，這兩分鐘的減員至關重要！`
+                               : `；目前比分 ${c.a}:${c.b}，該隊將少一人應戰。`;
+      return who + tail;
+    } },
+  { key: 'SUSP_4MIN', cat: 'REFEREE', title: '4-MIN SUSPENSION', tone: '#FF8A00', fg: '#15181E',
+    team: true, player: false, live: true,
+    body: (t, p, c) => t ? `${t} 因連續違規追加處罰，減員四分鐘；目前比分 ${c.a}:${c.b}，長時間的以少打多！`
+                         : `連續違規追加處罰，球隊減員四分鐘；目前比分 ${c.a}:${c.b}。` },
+  /* 黃 #F5C400 — 警告 */
+  { key: 'YELLOW_CARD', cat: 'REFEREE', title: 'YELLOW CARD', tone: '#F5C400', fg: '#15181E',
+    team: true, player: true,
+    body: (t, p) => p ? `${t} ${p} 因違反運動精神或危險動作被出示黃牌警告，再犯將面臨兩分鐘罰離。`
+                 : t ? `${t} 一名球員被出示黃牌正式警告，再犯將面臨兩分鐘罰離。`
+                     : '對違反運動精神或危險動作的正式警告，再犯將面臨兩分鐘罰離。' },
+  { key: 'PASSIVE_WARNING', cat: 'REFEREE', title: 'PASSIVE PLAY WARNING', tone: '#F5C400', fg: '#15181E',
+    team: true, player: false,
+    body: t => t ? `${t} 進攻消極，須於四次傳球內完成射門。`
+                 : '消極比賽預警：進攻方須於四次傳球內完成射門。' },
+  /* 灰 #57606E — 中性重新開球 */
+  { key: 'THROW_IN', cat: 'REFEREE', title: 'THROW-IN', tone: '#57606E', fg: '#FFFFFF',
+    team: true, player: false,
+    body: t => t ? `球出邊線，由 ${t} 擲界外球恢復比賽。`
+                 : '球出邊線，由對方擲界外球恢復比賽。' },
+  { key: 'GK_THROW', cat: 'REFEREE', title: 'GOALKEEPER THROW', tone: '#57606E', fg: '#FFFFFF',
+    team: true, player: false,
+    body: t => t ? `球越底線，由 ${t} 守門員擲球恢復比賽。`
+                 : '球越底線，由守門員擲球恢復比賽。' },
+  /* 綠 #0E9E64 — 解除／有利 */
+  { key: 'SUSP_EXPIRED', cat: 'REFEREE', title: 'SUSPENSION EXPIRED', tone: '#0E9E64', fg: '#FFFFFF',
+    team: true, player: true, live: true,
+    body: (t, p, c) => (p ? `${t} ${p} 罰時結束歸隊，該隊恢復滿員應戰；目前比分 ${c.a}:${c.b}。`
+                     : t ? `${t} 罰時結束，球員歸隊，恢復滿員應戰；目前比分 ${c.a}:${c.b}。`
+                         : `罰時結束，球員歸隊，恢復滿員應戰；目前比分 ${c.a}:${c.b}。`) },
+  { key: 'GOAL_AWARDED', cat: 'REFEREE', title: 'GOAL AWARDED', tone: '#0E9E64', fg: '#FFFFFF',
+    team: true, player: true, live: true,
+    body: (t, p, c) => (p ? `裁判確認 ${t} ${p} 的進球有效；目前比分 ${c.a}:${c.b}。`
+                     : t ? `裁判確認 ${t} 此球有效；目前比分 ${c.a}:${c.b}。`
+                         : `裁判確認進球有效；目前比分 ${c.a}:${c.b}。`) },
+  /* ==================== MATCH CONTROL 賽事控制 ==================== */
+  /* 橙 #FF8A00 — 中斷／緊急 */
+  { key: 'PLAY_SUSPENDED', cat: 'CONTROL', title: 'PLAY SUSPENDED', tone: '#FF8A00', fg: '#15181E',
+    team: false, player: false, live: true,
+    body: (t, p, c) => `比賽於 ${c.period} ${c.clock} 暫時中斷，恢復時間另行通知。` },
+  { key: 'LAST_30S', cat: 'CONTROL', title: 'LAST 30 SECONDS', tone: '#FF8A00', fg: '#15181E',
+    team: false, player: false, live: true,
+    body: (t, p, c) => {
+      if (!c.winner) return `比賽最後三十秒，雙方 ${c.a}:${c.b} 平手，勝負懸於一線！`;
+      if (c.diff <= 2) return `比賽最後三十秒，${c.lead} 僅以 ${c.hi}:${c.lo} 領先，懸念保留到最後一刻！`;
+      return `比賽進入最後三十秒，${c.lead} 以 ${c.hi}:${c.lo} 領先。`;
+    } },
+  /* 青 #0FA3B1 — 醫療 */
+  { key: 'MEDICAL_TIMEOUT', cat: 'CONTROL', title: 'MEDICAL TIME-OUT', tone: '#0FA3B1', fg: '#FFFFFF',
+    team: true, player: true, live: true,
+    body: (t, p, c) => (p ? `${t} ${p} 接受治療，比賽暫停，計時停在 ${c.clock}。`
+                     : t ? `${t} 場上球員接受治療，比賽暫停，計時停在 ${c.clock}。`
+                         : `場上球員接受治療，比賽暫停，計時停在 ${c.clock}。`) },
+  /* 藍 #2F6FED — 流程資訊 */
+  { key: 'THROW_OFF', cat: 'CONTROL', title: 'THROW-OFF', tone: '#2F6FED', fg: '#FFFFFF',
+    team: true, player: false,
+    body: t => t ? `由 ${t} 於中線開球。`
+                 : '由中線開球，比賽開始。' },
+  /* score comparison at the interval (Jason's direction): level / margin tiers,
+   * the leader read from the LIVE score — server AUTO_INFO mirrors this writer */
+  { key: 'HALF_TIME', cat: 'CONTROL', title: 'HALF-TIME', tone: '#2F6FED', fg: '#FFFFFF',
+    team: false, player: false, live: true,
+    body: (t, p, c) => {
+      if (!c.winner) return `半場結束，雙方 ${c.a}:${c.b} 平分秋色，下半場見真章。`;
+      if (c.diff === 1) return `半場結束，${c.lead} 以 ${c.hi}:${c.lo} 一球暫時領先，勝負仍是未知之數。`;
+      if (c.diff <= 3) return `半場結束，${c.lead} 以 ${c.hi}:${c.lo} 領先，比分緊咬，懸念留待下半場。`;
+      if (c.diff <= 6) return `半場結束，${c.lead} 以 ${c.hi}:${c.lo} 領先，暫時掌握比賽主動權。`;
+      return `半場結束，${c.lead} 以 ${c.hi}:${c.lo} 大幅領先，下半場能否守住優勢？`;
+    } },
+  /* the one score-driven preset: opens on 勝方 and tiers its wording by the goal
+   * margin. `live: true` re-composes it on every sync so a late score correction
+   * cannot leave a wrong winner on screen. Defensive by design — it reads the
+   * winner from the SCORE, so hand-picking the losing side still reads correctly. */
+  { key: 'FULL_TIME', cat: 'CONTROL', title: 'FULL-TIME', tone: '#2F6FED', fg: '#FFFFFF',
+    team: true, player: false, teamDefault: 'WIN', live: true,
+    body: (t, p, c) => {
+      const hi = Math.max(c.a, c.b), lo = Math.min(c.a, c.b);
+      if (!c.winner) return `雙方以 ${c.a}:${c.b} 打成平手，比賽結束。`;
+      if (!t) return `比賽結束，最終比分 ${c.a}:${c.b}。`;
+      if (c.key !== c.winner) return `比賽結束，${t} 以 ${lo}:${hi} 落敗。`;
+      if (c.diff === 1) return `恭喜 ${t} 以 ${hi}:${lo} 一球之差險勝，雙方緊咬到最後一刻！`;
+      if (c.diff <= 3) return `恭喜 ${t} 以 ${hi}:${lo} 勝出，比分緊咬直到終場！`;
+      if (c.diff <= 6) return `恭喜 ${t} 以 ${hi}:${lo} 穩健取勝，全場掌握比賽節奏！`;
+      if (c.diff <= 9) return `恭喜 ${t} 以 ${hi}:${lo} 大勝，攻守兩端表現全面！`;
+      return `恭喜 ${t} 以 ${hi}:${lo} 懸殊比分大獲全勝，展現壓倒性實力！`;
+    } },
+  { key: 'VIDEO_REVIEW', cat: 'CONTROL', title: 'VIDEO REVIEW', tone: '#2F6FED', fg: '#FFFFFF',
+    team: false, player: false, live: true,
+    body: (t, p, c) => `裁判覆核影像中，請稍候；目前比分 ${c.a}:${c.b}。` },
+  { key: 'OVERTIME', cat: 'CONTROL', title: 'OVERTIME', tone: '#2F6FED', fg: '#FFFFFF',
+    team: false, player: false, live: true,
+    body: (t, p, c) => (!c.winner
+      ? `雙方 ${c.a}:${c.b} 戰平，進入加時：休息五分鐘後進行兩節各五分鐘。`
+      : `平手進入加時：休息五分鐘後進行兩節各五分鐘。`) },
+  { key: 'SHOOTOUT', cat: 'CONTROL', title: 'SHOOTOUT', tone: '#2F6FED', fg: '#FFFFFF',
+    team: false, player: false, live: true,
+    body: (t, p, c) => (!c.winner
+      ? `雙方 ${c.a}:${c.b} 戰平，以七米球決勝：每隊五名球員輪流主射。`
+      : `以七米球決勝：每隊五名球員輪流主射。`) },
+  { key: 'EMPTY_GOAL', cat: 'CONTROL', title: 'EMPTY GOAL', tone: '#2F6FED', fg: '#FFFFFF',
+    team: true, player: false, live: true,
+    body: (t, p, c) => {
+      if (t && c.key && c.winner && c.key !== c.winner)
+        return `落後 ${c.diff} 分之際，${t} 撤下守門員改以七名場上球員進攻，放手一搏。`;
+      return t ? `${t} 撤下守門員，以七名場上球員進攻。`
+               : `該隊撤下守門員，以七名場上球員進攻。`;
+    } },
+  { key: 'TIME_CALIBRATE', cat: 'CONTROL', title: 'TIME-CALIBRATE', tone: '#2F6FED', fg: '#FFFFFF',
+    team: false, player: false, live: true,
+    body: (t, p, c) => `正在校正官方比賽計時，校正後由 ${c.clock} 繼續。` },
+  /* 綠 #0E9E64 — 正常進行 */
+  /* remaining time + score for tension (Jason's direction) — server AUTO_INFO
+   * mirrors the team-only branch for the icon-linked auto banner */
+  { key: 'TEAM_TIMEOUT', cat: 'CONTROL', title: 'TEAM TIME-OUT', tone: '#0E9E64', fg: '#FFFFFF',
+    team: true, player: false, live: true,
+    body: (t, p, c) => {
+      const who = t ? `${t} 請求暫停，時長一分鐘` : `球隊請求暫停，時長一分鐘`;
+      if (!c.winner) return `${who}；兩隊 ${c.a}:${c.b} 戰平，比賽剩餘 ${c.left}，這一分鐘至關重要！`;
+      if (c.diff <= 3) return `${who}；目前 ${c.a}:${c.b}，比賽剩餘 ${c.left}，關鍵時刻的戰術部署！`;
+      return `${who}；目前比分 ${c.a}:${c.b}，比賽剩餘 ${c.left}。`;
+    } },
+  { key: 'RESUME', cat: 'CONTROL', title: 'RESUME', tone: '#0E9E64', fg: '#FFFFFF',
+    team: false, player: false, live: true,
+    body: (t, p, c) => `比賽即將恢復，剩餘 ${c.left}。` },
 ];
+
+/* The 說明 textarea is a LIVE PREVIEW of the composed body: picking a preset or
+ * changing 球隊 / 球員 rewrites it through that preset's own writer, and whatever
+ * stands in the box is exactly what goes on air (hand tweaks still possible). */
 let ibSel = null;
+let ibLastComposed = '';   // what the writer last produced — lets us spot a hand edit
+let ibLastWinKey = null;   // last resolved 勝方, to notice the lead changing hands
+let lastRunSeen = null;    // timer.running from the previous sync — pause-edge detector
+
+/* 勝方 is a VIRTUAL entry in the 球隊 dropdown: it is not a team key, it resolves
+ * to whichever side is ahead RIGHT NOW (null while level). Everything downstream
+ * (short name, roster, player list) must go through ibTeamKey, never read the
+ * raw select value — 'WIN' is not a key into state.teams / state.roster. */
+function ibWinnerKey(s) {
+  if (!s) return null;
+  const a = s.teams.A.score, b = s.teams.B.score;
+  return a > b ? 'A' : b > a ? 'B' : null;
+}
+function ibTeamKey() {
+  const v = $('ibTeamSel').value;
+  if (v === 'A' || v === 'B') return v;
+  if (v === 'WIN') return ibWinnerKey(st);
+  return null;
+}
+function ibTeamShort() {
+  const k = ibTeamKey();
+  return (k && st) ? (st.teams[k].short || k).toUpperCase() : '';
+}
+/* live match facts for presets whose wording depends on the score / clock.
+ * Presets that don't care simply ignore the 3rd body() argument.
+ *   a, b    — live scores          diff — |a-b|
+ *   winner  — 'A'|'B'|null         key  — the RESOLVED 球隊 pick ('WIN' mapped)
+ *   hi, lo  — sorted scores        lead — leading side's SHORT NAME ('' if level)
+ *   clock   — the time as the scoreboard shows it right now (direction-aware)
+ *   left    — time REMAINING to the end of the period (mm:ss, both directions)
+ *   period  — current period text */
+function ibCtx() {
+  const a = (st && st.teams.A.score) || 0;
+  const b = (st && st.teams.B.score) || 0;
+  const winner = ibWinnerKey(st);
+  const remMs = st ? timerRemaining(st.timer) : 0;
+  const dispMs = (st && st.timer.direction === 'up') ? Math.max(0, st.timer.durationMs - remMs) : remMs;
+  return {
+    a, b,
+    diff: Math.abs(a - b),
+    winner,
+    key: ibTeamKey(),
+    hi: Math.max(a, b),
+    lo: Math.min(a, b),
+    lead: winner && st ? (st.teams[winner].short || winner).toUpperCase() : '',
+    clock: fmtMs(dispMs),
+    left: fmtMs(remMs),
+    period: (st && st.period.text) || '',
+  };
+}
+/* named players of a team, in roster order (PLAYER role first, then the rest) */
+function ibTeamRoster(team) {
+  const list = (st && st.roster && st.roster[team]) || [];
+  const named = list.filter(e => String(e.name || '').trim());
+  return [...named.filter(e => e.role === 'PLAYER'), ...named.filter(e => e.role !== 'PLAYER')];
+}
+/* banner wording for a roster entry — "12 號 陳大文" / "陳大文" (no number registered) */
+function ibPlayerLabel() {
+  const team = ibTeamKey();
+  const id = $('ibPlayerSel').value;
+  if (!team || !id) return '';
+  const e = ibTeamRoster(team).find(x => x.id === id);
+  if (!e) return '';
+  const num = String(e.num || '').trim();
+  return (num ? num + ' 號 ' : '') + e.name;
+}
+function ibFillPlayers() {
+  const sel = $('ibPlayerSel');
+  const keep = sel.value;
+  const team = ibTeamKey();
+  sel.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '球員（不指定）';
+  sel.append(none);
+  if (team) {
+    for (const e of ibTeamRoster(team)) {
+      const o = document.createElement('option');
+      o.value = e.id;
+      const num = String(e.num || '').trim();
+      const role = e.role === 'PLAYER' ? (e.pos || '') : (BB_ROLE_LABEL[e.role] || e.role || '');
+      o.textContent = (num ? '#' + num + ' ' : '') + e.name + (role ? ' · ' + role : '');
+      sel.append(o);
+    }
+  }
+  sel.value = [...sel.options].some(o => o.value === keep) ? keep : '';
+}
+/* clear + disable whatever the picked preset does not use (Jason: 不適用就要設為空並禁止選擇) */
+function ibSyncSelects() {
+  const teamSel = $('ibTeamSel');
+  const playerSel = $('ibPlayerSel');
+  const canTeam = !!(ibSel && ibSel.team);
+  teamSel.disabled = !canTeam;
+  if (!canTeam) teamSel.value = '';
+  ibFillPlayers();
+  // a player only makes sense once its team is RESOLVED (勝方 while level = no team)
+  playerSel.disabled = !(ibSel && ibSel.player && ibTeamKey());
+  if (playerSel.disabled) playerSel.value = '';
+}
+function ibRecompose() {
+  if (!ibSel) return;
+  ibLastComposed = ibSel.body(ibTeamShort(), ibPlayerLabel(), ibCtx());
+  $('ibBody').value = ibLastComposed;
+}
+/* a `live` preset's wording is derived from match state (FULL-TIME: winner + margin),
+ * so a score correction after picking it would leave stale text on screen. Re-compose
+ * on every sync — but ONLY while the box still holds exactly what the writer wrote,
+ * so a hand edit is never clobbered. */
+function ibRefreshComposed() {
+  if (!ibSel || !ibSel.live) return;
+  const box = $('ibBody');
+  if (document.activeElement === box || box.value !== ibLastComposed) return;
+  ibRecompose();
+}
 function ibPickPreset(entry, btn) {
   ibSel = entry;
-  $('ibTitle').value = entry[2];
-  $('ibPlayer').value = '';
-  $('ibReason').value = '';
-  $('ibBody').value = entry[5];
+  $('ibTitle').value = entry.title;
   const badge = $('ibCatBadge');
-  badge.textContent = entry[1] === 'CONTROL' ? 'MATCH CONTROL' : 'REFEREE';
-  badge.classList.toggle('ctl', entry[1] === 'CONTROL');
+  badge.textContent = entry.cat === 'CONTROL' ? 'MATCH CONTROL' : 'REFEREE';
+  badge.classList.toggle('ctl', entry.cat === 'CONTROL');
+  // 球隊 / 球員 survive a preset switch when the new preset still takes them —
+  // 黃牌 → 2 分鐘罰時 on the same player is one gesture, not two re-picks.
+  // 勝方 is the exception: it belongs to FULL-TIME's flow and must NOT leak onto
+  // unrelated presets (「由 勝方 於中線開球」reads wrong) — drop it on switch.
+  // A preset may override with its own default (FULL-TIME opens on 勝方).
+  if ($('ibTeamSel').value === 'WIN' && entry.teamDefault !== 'WIN') $('ibTeamSel').value = '';
+  if (entry.teamDefault) $('ibTeamSel').value = entry.teamDefault;
+  ibSyncSelects();
+  ibRecompose();
   document.querySelectorAll('.preset-grid .pv').forEach(x => x.classList.toggle('active', x === btn));
 }
+const ibBtnByKey = {};   // preset key -> its grid button (auto-preselect needs both)
 for (const entry of IB_PRESETS) {
   const btn = document.createElement('button');
   btn.className = 'btn pv';
-  btn.style.setProperty('--pv', entry[3]);
-  btn.textContent = entry[2];
-  btn.addEventListener('click', () => ibPickPreset(entry, btn));
-  $(entry[1] === 'CONTROL' ? 'ibPresetsCtl' : 'ibPresetsRef').append(btn);
+  btn.style.setProperty('--pv', entry.tone);
+  btn.textContent = entry.title;
+  // 再次點擊已選中的預設＝直接顯示橫幅（同「顯示橫幅」鈕），不是重新填一次編輯器
+  btn.addEventListener('click', () => {
+    if (ibSel === entry && btn.classList.contains('active')) { ibShowNow(); return; }
+    ibPickPreset(entry, btn);
+  });
+  ibBtnByKey[entry.key] = btn;
+  $(entry.cat === 'CONTROL' ? 'ibPresetsCtl' : 'ibPresetsRef').append(btn);
 }
-$('ibShowBtn').addEventListener('click', () => {
+/* 暫停聯動（automation.pausePreselect）：把編輯器預選成 TEAM TIME-OUT、切到比賽
+ * 分頁並捲動到資訊橫幅卡。正在此卡輸入時不打擾（既不改編輯器也不捲動）。 */
+function ibAutoPreselectTimeout() {
+  const entry = IB_PRESETS.find(e => e.key === 'TEAM_TIMEOUT');
+  const btn = ibBtnByKey.TEAM_TIMEOUT;
+  const card = $('cardInfoBanner');
+  if (!entry || !btn || typingInside(card)) return;
+  ibPickPreset(entry, btn);
+  setTab('live');
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+$('ibTeamSel').addEventListener('change', () => {
+  $('ibPlayerSel').value = '';   // the old pick belongs to the other team
+  ibSyncSelects();
+  ibRecompose();
+});
+$('ibPlayerSel').addEventListener('change', ibRecompose);
+ibSyncSelects();   // nothing picked yet -> both dropdowns start cleared + disabled
+
+/* put the current editor content on air — shared by the 顯示橫幅 button and by
+ * re-clicking an already-active preset. `team` rides along so the server-side
+ * 橫幅→圖標／暫停 automation knows which side the banner concerns. */
+function ibShowNow() {
   const cat = $('ibCatBadge').classList.contains('ctl') ? 'CONTROL' : 'REFEREE';
   const title = $('ibTitle').value.trim();
-  const body = [$('ibPlayer').value.trim(), $('ibReason').value.trim(), $('ibBody').value.trim()]
-    .filter(Boolean).join(' — ');
+  const body = $('ibBody').value.trim();
   if (!title && !body) return;
   act('info.show', {
-    key: ibSel ? ibSel[0] : '',
+    key: ibSel ? ibSel.key : '',
     cat,
     title: title || 'INFO',
     body,
-    tone: ibSel ? ibSel[3] : (cat === 'CONTROL' ? '#2F6FED' : '#E0132F'),
-    fg: ibSel ? ibSel[4] : '#FFFFFF',
+    tone: ibSel ? ibSel.tone : (cat === 'CONTROL' ? '#2F6FED' : '#E0132F'),
+    fg: ibSel ? ibSel.fg : '#FFFFFF',
+    team: ibTeamKey() || '',
   });
-});
+}
+$('ibShowBtn').addEventListener('click', ibShowNow);
 $('ibHideBtn').addEventListener('click', () => act('info.hide'));
 
 /* ------------------------------------------------- bottom banner card */
 /* Picker = every candidate laid out flat (no dropdown), grouped A隊 / B隊 / 賽事人員 /
- * 機構, live-filtered by the text box. Click selects (click again unselects); the
- * 顯示橫幅 button puts the selection on air (Jason: 先選取再按顯示). The chip whose
- * card is currently on air gets a green edge. Orgs need name+role configured first. */
+ * 機構, live-filtered by the text box. Click selects; clicking the SAME chip again
+ * puts it straight on air (Jason 2026-07-17: 再點即顯示，不是取消選擇) — the
+ * 顯示橫幅 button still works on the current selection. The chip whose card is
+ * currently on air gets a green edge. Orgs need a name configured first. */
 
-const BB_ROLE_LABEL = {
-  LEADER: '領隊', COACH: '教練', STAFF: '工作人員', PLAYER: '球員',
-  COMMENTATOR: '評論員', REFEREE: '裁判',
-};
 const noExt = f => String(f).replace(/\.[^.]+$/, '');
 
 let assetsList = { banner: [], corner: [] };   // folder listings, from every SSE payload
@@ -436,8 +894,14 @@ function bbChipEl({ sel, label, sub, thumb, disabled, title }) {
   }
   if (title) b.title = title;
   if (disabled) b.disabled = true;
-  else b.addEventListener('click', () => {
-    bbSel = bbSelIs(sel) ? null : sel;   // click again to unselect
+  else b.addEventListener('click', async () => {
+    if (bbSelIs(sel)) {
+      // 再次點擊已選取的待選項＝直接上架這張橫幅（不是取消選擇）
+      const r = await act('bottom.show', sel);
+      if (r && !r.ok) alert(r.error || '顯示失敗');
+      return;
+    }
+    bbSel = sel;
     lastBbKey = '';
     renderBbPicker();
   });
@@ -572,6 +1036,103 @@ $('bbShowBtn').addEventListener('click', async () => {
 });
 $('bbHideBtn').addEventListener('click', () => act('bottom.hide'));
 
+/* --------------------------------------------- bottom banner sequence */
+
+let bbSeqRunInfo = null;   // runtime playback status from the snapshot
+let lastBbSeqKey = '';
+
+/* tiny ↑/↓/✕ list button used by the sequence rows */
+function seqIconBtn(txt, title, onClick) {
+  const b = document.createElement('button');
+  b.className = 'r-x';
+  b.textContent = txt;
+  b.title = title;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function bbSeqItemLabel(it) {
+  if (it.kind === 'org') {
+    const meta = (st.orgBanners || {})[it.file];
+    return {
+      label: (meta && String(meta.name || '').trim()) || noExt(it.file || '') || '（機構）',
+      sub: '機構',
+    };
+  }
+  const list = it.kind === 'official'
+    ? ((st.roster && st.roster.officials) || [])
+    : ((st.roster && st.roster[it.group === 'B' ? 'B' : 'A']) || []);
+  const e = list.find(x => x.id === it.entryId);
+  if (!e || !String(e.name || '').trim()) return { label: '（人員已移除，播放時自動略過）', sub: '' };
+  return { label: e.name, sub: BB_ROLE_LABEL[e.role] || e.role || '' };
+}
+
+function sendBbSeq(mut) {
+  if (!st) return;
+  const seq = JSON.parse(JSON.stringify(st.bbSeq || { items: [], intervalSec: 10, loop: false }));
+  mut(seq);
+  act('bbseq.save', { seq });
+}
+
+function renderBbSeqList(s) {
+  const host = $('bbSeqList');
+  const key = JSON.stringify([s.bbSeq, bbSeqRunInfo, s.roster, s.orgBanners]);
+  if (key === lastBbSeqKey) return;
+  lastBbSeqKey = key;
+  host.innerHTML = '';
+  const items = (s.bbSeq && s.bbSeq.items) || [];
+  if (!items.length) {
+    const d = document.createElement('div');
+    d.className = 'bbp-empty';
+    d.textContent = '先在上方點選人員或機構，再按「加入目前選取」';
+    host.append(d);
+    return;
+  }
+  items.forEach((it, i) => {
+    const row = document.createElement('div');
+    row.className = 'seq-row' + (bbSeqRunInfo && bbSeqRunInfo.idx === i ? ' current' : '');
+    const num = document.createElement('b');
+    num.className = 'seq-num';
+    num.textContent = i + 1;
+    const { label, sub } = bbSeqItemLabel(it);
+    const name = document.createElement('span');
+    name.className = 'bbseq-label';
+    name.textContent = label;
+    row.append(num, name);
+    if (sub) {
+      const sb = document.createElement('span');
+      sb.className = 'bbseq-sub';
+      sb.textContent = sub;
+      row.append(sb);
+    }
+    const up = seqIconBtn('↑', '上移', () => {
+      if (i > 0) sendBbSeq(q => { [q.items[i - 1], q.items[i]] = [q.items[i], q.items[i - 1]]; });
+    });
+    const down = seqIconBtn('↓', '下移', () => {
+      if (i < items.length - 1) sendBbSeq(q => { [q.items[i + 1], q.items[i]] = [q.items[i], q.items[i + 1]]; });
+    });
+    const x = seqIconBtn('✕', '自序列移除', () => sendBbSeq(q => { q.items.splice(i, 1); }));
+    row.append(up, down, x);
+    host.append(row);
+  });
+}
+
+$('bbSeqAddBtn').addEventListener('click', () => {
+  if (!bbSel) { alert('請先在上方點選一位人員或一個機構'); return; }
+  sendBbSeq(q => { q.items.push({ ...bbSel }); });
+});
+$('bbSeqLoop').addEventListener('change', e => sendBbSeq(q => { q.loop = e.target.checked; }));
+const sendBbSeqSec = throttle(v => sendBbSeq(q => { q.intervalSec = v; }), 250);
+$('bbSeqSec').addEventListener('input', e => {
+  $('bbSeqSecVal').textContent = e.target.value;
+  sendBbSeqSec(+e.target.value);
+});
+$('bbSeqPlayBtn').addEventListener('click', async () => {
+  const r = await act('bbseq.play');
+  if (r && !r.ok) alert(r.error || '播放失敗');
+});
+$('bbSeqStopBtn').addEventListener('click', () => act('bbseq.stop'));
+
 /* ------------------------------------------------- corner logo card */
 
 function renderCornerGrid() {
@@ -624,7 +1185,6 @@ function flashCornerNote(msg) {
 /* timer */
 function toggleTimer() { if (st) act(st.timer.running ? 'timer.pause' : 'timer.start'); }
 $('startPause').addEventListener('click', toggleTimer);
-$('qStartPause').addEventListener('click', toggleTimer);
 $('timerReset').addEventListener('click', () => act('timer.reset'));
 document.querySelectorAll('.adjust-row .btn').forEach(b => {
   b.addEventListener('click', () => {
@@ -661,7 +1221,6 @@ document.querySelectorAll('#modeSeg .seg-btn').forEach(b => {
 });
 $('autoPauseWord').addEventListener('change', e => patch({ timer: { autoPauseWord: e.target.checked } }));
 $('pauseAlternate').addEventListener('change', e => patch({ timer: { pauseAlternate: e.target.checked } }));
-$('autoEndMode').addEventListener('change', e => patch({ timer: { autoEndMode: e.target.checked } }));
 $('endAlternate').addEventListener('change', e => patch({ timer: { endAlternate: e.target.checked } }));
 document.querySelectorAll('#timerDirSeg .seg-btn').forEach(b => {
   b.addEventListener('click', () => act('timer.direction', { direction: b.dataset.dir }));
@@ -680,7 +1239,6 @@ document.querySelectorAll('.nm-seg').forEach(seg => {
 document.querySelectorAll('#goalEffectSeg .seg-btn').forEach(b => {
   b.addEventListener('click', () => patch({ board: { goalEffect: b.dataset.effect } }));
 });
-$('swAutoBreak').addEventListener('change', e => patch({ board: { autoExpandBreak: e.target.checked } }));
 $('swAmbient').addEventListener('change', e => patch({ board: { ambient: e.target.checked } }));
 $('swClock').addEventListener('change', e => patch({ board: { clockVisible: e.target.checked } }));
 const sendDriftSpeed = throttle(v => patch({ board: { driftSpeed: v } }), 150);
@@ -691,6 +1249,71 @@ const sendScale = throttle(v => patch({ board: { scale: v } }), 150);
 $('scale').addEventListener('input', e => { $('scaleVal').textContent = Number(e.target.value).toFixed(2); sendScale(+e.target.value); });
 const sendMargin = throttle(v => patch({ board: { margin: v } }), 150);
 $('margin').addEventListener('input', e => { $('marginVal').textContent = e.target.value; sendMargin(+e.target.value); });
+
+/* automation prefs — plain toggles map 1:1 onto automation.* booleans */
+for (const [id, key] of [
+  ['atTimeoutCountdown', 'timeoutCountdown'],
+  ['atTimeoutAutoPause', 'timeoutAutoPause'],
+  ['atTimeoutAutoRemove', 'timeoutAutoRemove'],
+  ['atSuspAutoRemove', 'suspAutoRemove'],
+  ['atSuspExpireBanner', 'suspExpireBanner'],
+  ['atIconBanner', 'iconBanner'],
+  ['atPausePreselect', 'pausePreselect'],
+  ['atResumeClean', 'resumeCleanup'],
+  ['atHalfEndFlow', 'halfEndFlow'],
+  ['atHalftimeArm', 'halftimeArm'],
+  ['atMatchEndFlow', 'matchEndFlow'],
+  ['atMatchEndTie', 'matchEndTieSuppress'],
+  ['atEndHidePeriod', 'endHidePeriod'],
+  ['atLast30', 'last30Banner'],
+  ['atTimeCalib', 'timeCalibBanner'],
+  ['atInfoIcon', 'infoIcon'],
+  ['atInfoToPause', 'infoTimeoutPause'],
+  ['atInfoToResume', 'infoTimeoutResume'],
+  ['atInfoMedPause', 'infoMedicalPause'],
+  ['atInfoAutoHide', 'infoAutoHide'],
+  ['atBottomAutoHide', 'bottomAutoHide'],
+  ['atRosterFlip', 'rosterAutoFlip'],
+]) {
+  $(id).addEventListener('change', e => patch({ automation: { [key]: e.target.checked } }));
+}
+
+/* 三組「畫面（關閉/全畫幅/大型）＋序列」：自動展示全畫幅與自動播放序列互斥
+ * （底部橫幅在全畫幅下讓位）。點其一就把同組另一邊對開；server sanitize 亦有
+ * 同款最後防線（board='full' 時強制 seq=false）。 */
+const AUTO_BOARD_SEGS = [
+  ['atPauseBoardSeg', 'pauseBoard', 'pauseSeq'],
+  ['atHalfEndBoardSeg', 'halfEndBoard', 'halfEndSeq'],
+  ['atMatchEndBoardSeg', 'matchEndBoard', 'matchEndSeq'],
+];
+for (const [segId, boardKey, seqKey] of AUTO_BOARD_SEGS) {
+  document.querySelectorAll('#' + segId + ' .seg-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      const upd = { [boardKey]: b.dataset.bd };
+      if (b.dataset.bd === 'full' && st && st.automation && st.automation[seqKey]) upd[seqKey] = false;
+      patch({ automation: upd });
+    });
+  });
+}
+for (const [id, seqKey, boardKey] of [
+  ['atPauseSeq', 'pauseSeq', 'pauseBoard'],
+  ['atHalfEndSeq', 'halfEndSeq', 'halfEndBoard'],
+  ['atMatchEndSeq', 'matchEndSeq', 'matchEndBoard'],
+]) {
+  $(id).addEventListener('change', e => {
+    const upd = { [seqKey]: e.target.checked };
+    if (e.target.checked && st && st.automation && st.automation[boardKey] === 'full') upd[boardKey] = 'off';
+    patch({ automation: upd });
+  });
+}
+for (const [rangeId, valId, key] of [
+  ['atInfoSec', 'atInfoSecVal', 'infoAutoHideSec'],
+  ['atBottomSec', 'atBottomSecVal', 'bottomAutoHideSec'],
+  ['atRosterSec', 'atRosterSecVal', 'rosterAutoFlipSec'],
+]) {
+  const send = throttle(v => patch({ automation: { [key]: v } }), 200);
+  $(rangeId).addEventListener('input', e => { $(valId).textContent = e.target.value; send(+e.target.value); });
+}
 
 /* info */
 $('swEvent').addEventListener('change', e => patch({ event: { visible: e.target.checked } }));
@@ -726,7 +1349,14 @@ document.querySelectorAll('.swatches').forEach(sw => {
 /* ------------------------------------------------------------ roster */
 
 const ROLE_SECTIONS_TEAM = [['LEADER', '領隊'], ['COACH', '教練'], ['STAFF', '工作人員'], ['PLAYER', '球員']];
-const ROLE_SECTIONS_OFF = [['COMMENTATOR', '評論員'], ['REFEREE', '裁判']];
+const ROLE_SECTIONS_OFF = [
+  ['COMMENTATOR', '評論員'], ['REFEREE', '裁判'], ['VIP', '主禮嘉賓'], ['GUEST', '嘉賓'],
+  ['CHAMPION', '冠軍'], ['RUNNER_UP', '亞軍'], ['THIRD', '季軍'], ['FOURTH', '殿軍'],
+];
+/* 名次條目：name 欄是「隊伍名稱」、title 欄是組別；底部橫幅背景用該名次的獎牌色
+ * （金／銀／銅／淺綠，須與 overlay.js 的 BB_AWARD_COLOR 一致） */
+const AWARD_ROLES = new Set(['CHAMPION', 'RUNNER_UP', 'THIRD', 'FOURTH']);
+const AWARD_COLOR = { CHAMPION: '#E6B325', RUNNER_UP: '#BCC3CE', THIRD: '#C67B3C', FOURTH: '#93CE9E' };
 let rosterGroup = 'A';
 let lastRosterJson = '';
 
@@ -840,7 +1470,15 @@ function renderRosterEditor() {
     sec.className = 'roster-sec';
     const head = document.createElement('div');
     head.className = 'rs-title';
-    head.textContent = label;
+    if (AWARD_ROLES.has(role)) {   // medal colour cue = the banner's background for this placing
+      const dot = document.createElement('i');
+      dot.className = 'rs-award-dot';
+      dot.style.background = AWARD_COLOR[role];
+      head.append(dot);
+    }
+    const lb = document.createElement('span');
+    lb.textContent = label;
+    head.append(lb);
     const add = document.createElement('button');
     add.className = 'btn sm';
     add.textContent = '＋ 新增';
@@ -863,9 +1501,15 @@ function renderRosterEditor() {
           rosterInputEl(group, e, 'grow', '姓名', 'name', 30),
           rosterInputEl(group, e, 'r-pos', '位置', 'pos', 10),
         );
+      } else if (AWARD_ROLES.has(role)) {
+        // 名次：名稱欄＝隊伍名稱，職稱欄＝組別（如 女子U6組）
+        row.append(
+          rosterInputEl(group, e, 'grow', '隊伍名稱', 'name', 30),
+          rosterInputEl(group, e, 'r-title', '職稱／組別', 'title', 50),
+        );
       } else {
         row.append(
-          rosterInputEl(group, e, 'r-title', '職稱', 'title', 14),
+          rosterInputEl(group, e, 'r-title', '職稱', 'title', 50),
           rosterInputEl(group, e, 'grow', '姓名', 'name', 30),
         );
       }
@@ -1333,11 +1977,12 @@ $('settingsExport').addEventListener('click', () => {
       timerPrefs: {
         autoPauseWord: !!st.timer.autoPauseWord,
         pauseAlternate: !!st.timer.pauseAlternate,
-        autoEndMode: !!st.timer.autoEndMode,
         endAlternate: !!st.timer.endAlternate,
       },
       cornerLogos: st.cornerLogos || [],
       orgBanners: st.orgBanners || {},
+      automation: st.automation || {},
+      hotkeys: st.hotkeys || {},
     },
   }, `scoreboard-settings-${fileStamp(Date.now())}.json`);
 });
@@ -1366,15 +2011,612 @@ const overlayUrl = location.origin + '/overlay';
 const obsUrl = $('obsUrl');
 if (obsUrl) obsUrl.textContent = overlayUrl;
 
-/* preview iframe scaling */
-const frame = document.querySelector('.preview-frame');
-const iframe = $('preview');
+/* ------------------------------------------ 預覽背景（純本機，不進 server） */
+/* 預覽 iframe 永遠載入「透明」的 /overlay —— 與 OBS 算圖的完全同一份文件。它底下
+ * 的東西全是 admin 這一側的裝飾：格線層、攝影機、或 WHEP 直播流。所以這裡沒有任何
+ * 一行碰得到直播輸出，切換背景也不會重載 iframe（不斷 SSE、不閃畫面）。
+ *
+ * 設定只存 localStorage（Jason：只存這台機器）——攝影機 deviceId 本來就是每台機器
+ * 不同的東西，而且它不該混進設定匯出檔。 */
+
+const PV_KEY = 'sbx.previewBg';
+const PV_MODES = ['pitch', 'dark', 'camera', 'stream'];
+/* 首次啟用時優先挑虛擬攝影機：這台機器要預覽的來源，最可能就是 OBS 虛擬攝影機 */
+const PV_VIRTUAL_RE = /virtual|obs|vcam|manycam|droidcam|xsplit|虛擬|虚拟/i;
+const PV_LABEL = { pitch: '格線', dark: '深色', camera: '攝影機', stream: '直播流' };
+const PV_CONN = {
+  new: '連線中…', connecting: '連線中…', connected: '已連線',
+  disconnected: '已斷線', failed: '連線失敗', closed: '未連線',
+};
+
+const frame = $('previewFrame');
+const pvVideo = $('pvVideo');
+const pvSeg = $('pvBgSeg');
+const pvCamSel = $('pvCamSel');
+const pvUrlIn = $('pvStreamUrl');
+
+let pv = { mode: 'pitch', camId: '', url: '', overlay: true };
+try { Object.assign(pv, JSON.parse(localStorage.getItem(PV_KEY) || '{}')); } catch {}
+if (!PV_MODES.includes(pv.mode)) pv.mode = 'pitch';
+pv.overlay = pv.overlay !== false;   // 舊存檔沒這個欄位 → 預設疊上
+/* 靜音狀態刻意「不」存檔：存成非靜音的話，下次載入時還沒有任何 user gesture，
+ * autoplay 政策會直接擋掉播放，整個預覽就是一片黑。每次載入都靜音，喇叭鈕只管當下。 */
+let pvMuted = true;
+let pvErr = '';
+
+const pvSave = () => { try { localStorage.setItem(PV_KEY, JSON.stringify(pv)); } catch {} };
+
+/* 只寫 --pv-scale：格線層與 iframe 共用它，兩層必須是同一個縮放，
+ * 100px 的格子才會跟計分板待在同一個 1920 座標系裡。 */
 function fitPreview() {
-  if (!frame || !iframe) return;
-  iframe.style.transform = `scale(${frame.clientWidth / 1920})`;
+  if (!frame) return;
+  frame.style.setProperty('--pv-scale', frame.clientWidth / 1920);
 }
-new ResizeObserver(fitPreview).observe(frame);
-fitPreview();
+if (frame) { new ResizeObserver(fitPreview).observe(frame); fitPreview(); }
+
+/* ------------------------------------------------------------ 攝影機 */
+
+let pvCamStream = null;
+let pvCamTok = 0;
+
+function pvCamStop() {
+  if (!pvCamStream) return;
+  pvCamStream.getTracks().forEach(t => t.stop());
+  pvCamStream = null;
+  pvVideo.srcObject = null;
+}
+const pvOpenCam = id => navigator.mediaDevices.getUserMedia({
+  audio: false,
+  video: id ? { deviceId: { exact: id } } : true,
+});
+
+/* 裝置標籤要拿到攝影機權限後才看得到，所以清單一律在第一次 getUserMedia 成功之後填 */
+async function pvListCams() {
+  let devs = [];
+  try {
+    devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  } catch {}
+  pvCamSel.innerHTML = '';
+  if (!devs.length) pvCamSel.appendChild(new Option('（找不到攝影機）', ''));
+  else devs.forEach((d, i) => pvCamSel.appendChild(new Option(d.label || `攝影機 ${i + 1}`, d.deviceId)));
+  pvCamSel.value = pv.camId || '';
+  return devs;
+}
+
+function pvCamErrText(e) {
+  if (e.name === 'NotAllowedError') return '攝影機權限被拒 —— 請在網址列的權限圖示開放後再試一次';
+  if (e.name === 'NotFoundError') return '找不到攝影機裝置';
+  if (e.name === 'NotReadableError') return '攝影機被其他程式佔用（OBS？）';
+  return String(e.message || e);
+}
+
+async function pvCamStart() {
+  const tok = ++pvCamTok;
+  const stale = () => tok !== pvCamTok || pv.mode !== 'camera';
+  const drop = s => s.getTracks().forEach(t => t.stop());
+  pvErr = '';
+  pvStreamStop();
+  pvCamStop();
+  /* getUserMedia 只在安全來源存在 —— 從別台機器用 http://<IP>:3690 開 admin 就沒有 */
+  if (!navigator.mediaDevices?.getUserMedia) {
+    pvErr = window.isSecureContext
+      ? '這個瀏覽器不支援攝影機存取'
+      : `瀏覽器只在安全來源開放攝影機 —— 請改用 localhost 或 https 開啟 admin（目前是 ${location.origin}）`;
+    pvPaint();
+    return;
+  }
+  try {
+    let stream = await pvOpenCam(pv.camId);
+    if (stale()) return drop(stream);
+    const devs = await pvListCams();
+    let curId = stream.getVideoTracks()[0]?.getSettings?.().deviceId || '';
+    /* 第一次用：沒存過裝置就優先挑虛擬攝影機，挑到的不是現在這台就換過去 */
+    if (!pv.camId) {
+      const want = devs.find(d => PV_VIRTUAL_RE.test(d.label))?.deviceId || curId;
+      if (want && want !== curId) {
+        drop(stream);
+        stream = await pvOpenCam(want);
+        curId = want;
+      }
+      pv.camId = curId;
+      pvSave();
+      pvCamSel.value = curId;
+    }
+    if (stale()) return drop(stream);
+    pvCamStream = stream;
+    pvVideo.srcObject = stream;
+    pvVideo.play().catch(() => {});
+  } catch (e) {
+    /* 存過的那台不見了（拔線、或虛擬攝影機沒開）→ 清掉重挑一次，只會遞迴這一層 */
+    if (pv.camId && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) {
+      pv.camId = '';
+      pvSave();
+      return pvCamStart();
+    }
+    pvErr = pvCamErrText(e);
+  }
+  pvPaint();
+}
+
+/* ------------------------------------------------------- WHEP 直播流 */
+/* 精簡 WHEP client。握手與 srs.sdk.js 同一套（POST offer SDP → 回 answer，Location
+ * 是 session resource，關閉時 DELETE 掉），但多做兩件 SDK 沒做、而這裡正是重點的事：
+ *   receiver.jitterBufferTarget = 0 —— 不要建去抖動緩衝
+ *   receiver.playoutDelayHint  = 0 —— 幀到了就畫，不要為了平滑再壓幾幀
+ * 少了這兩行，Chromium 會自己壓著 150–250ms；區網來源不需要這個緩衝。
+ * 另外刻意不設任何 STUN/TURN：只收 host candidate，區網直連，也省掉 gathering 的等待。 */
+
+let pvPC = null;         // 目前的 RTCPeerConnection
+let pvRes = null;        // WHEP session resource URL（來自 Location header）
+let pvTok = 0;           // 讓還在飛的握手知道自己已經過期
+let pvRetry = 0;         // 退避次數
+let pvRetryTimer = 0;
+
+function pvStreamStop() {
+  clearTimeout(pvRetryTimer);
+  pvRetryTimer = 0;
+  pvTok++;
+  if (pvPC) { try { pvPC.close(); } catch {} pvPC = null; }
+  if (pvRes) { fetch(pvRes, { method: 'DELETE' }).catch(() => {}); pvRes = null; }
+  if (pvVideo.srcObject && !pvCamStream) pvVideo.srcObject = null;
+}
+
+/* 沒設 STUN/TURN 就只會收集 host candidate，幾毫秒即完成。等它結束再送 offer，
+ * 對不吃 trickle 的 WHEP server 也成立（SRS 不等也行，但別家會要）。 */
+function pvIceReady(pc) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', chk); resolve(); };
+    const chk = () => { if (pc.iceGatheringState === 'complete') done(); };
+    const t = setTimeout(done, 300);   // 保險絲：不讓 gathering 卡住連線
+    pc.addEventListener('icegatheringstatechange', chk);
+  });
+}
+
+/* 1s → 2s → 4s → 8s 封頂。先開 admin 再開台、SRS 中途重啟，都會自己接回來。 */
+function pvScheduleRetry() {
+  if (pv.mode !== 'stream' || pvRetryTimer) return;
+  const wait = Math.min(8000, 1000 * 2 ** pvRetry++);
+  pvRetryTimer = setTimeout(() => {
+    pvRetryTimer = 0;
+    if (pv.mode === 'stream') pvStreamConnect();
+  }, wait);
+  pvPaint();
+}
+
+function pvStreamErrText(e) {
+  /* fetch 對「連不上」與「被 CORS 擋掉」都只給 TypeError: Failed to fetch */
+  if (e instanceof TypeError) return '連不上串流伺服器（未開台、網址錯，或該 server 未開 CORS）';
+  return String(e.message || e);
+}
+
+async function pvStreamConnect() {
+  pvStreamStop();          // 內含 pvTok++，把任何還在飛的舊握手作廢
+  const tok = pvTok;
+  const url = (pv.url || '').trim();
+  pvErr = '';
+  if (!url) { pvErr = '請先填入 WHEP 網址'; pvPaint(); return; }
+
+  const pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle' });
+  pvPC = pc;
+  const ms = new MediaStream();
+  /* 一律協商 video＋audio：聲音預設靜音，要聽再按喇叭 */
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+  pc.ontrack = ev => {
+    if (tok !== pvTok) return;
+    try { ev.receiver.jitterBufferTarget = 0; } catch {}
+    try { ev.receiver.playoutDelayHint = 0; } catch {}
+    ms.addTrack(ev.track);
+    if (pvVideo.srcObject !== ms) pvVideo.srcObject = ms;
+    pvVideo.muted = pvMuted;
+    pvVideo.play().catch(() => {});
+  };
+  pc.addEventListener('connectionstatechange', () => {
+    if (tok !== pvTok) return;
+    const s = pc.connectionState;
+    if (s === 'connected') { pvRetry = 0; pvErr = ''; }
+    else if (s === 'failed' || s === 'disconnected') pvScheduleRetry();
+    pvPaint();
+  });
+
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    await pvIceReady(pc);
+    if (tok !== pvTok) return;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: pc.localDescription.sdp,
+    });
+    if (!res.ok) throw new Error(`伺服器回應 HTTP ${res.status}`);
+    const answer = await res.text();
+    if (tok !== pvTok) return;          // 期間切走了模式／改了網址
+    const loc = res.headers.get('Location');
+    if (loc) pvRes = new URL(loc, url).href;
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+  } catch (e) {
+    if (tok !== pvTok) return;
+    pvErr = pvStreamErrText(e);
+    pvScheduleRetry();
+  }
+  pvPaint();
+}
+
+/* ------------------------------------------------------ 模式與畫面 */
+
+function pvPaint() {
+  frame.dataset.bg = pv.mode;
+  frame.dataset.overlay = pv.overlay ? '1' : '0';
+  for (const b of pvSeg.querySelectorAll('.seg-btn')) b.classList.toggle('active', b.dataset.bg === pv.mode);
+  $('pvCamRow').style.display = pv.mode === 'camera' ? '' : 'none';
+  $('pvStreamRow').style.display = pv.mode === 'stream' ? '' : 'none';
+  $('pvMuteBtn').textContent = pvMuted ? '🔇' : '🔊';
+
+  let txt = PV_LABEL[pv.mode];
+  let on = false;
+  if (pv.mode === 'camera') {
+    on = !!pvCamStream;
+    txt += ' · ' + (on ? (pvCamSel.selectedOptions[0]?.textContent || '已開啟') : '未開啟');
+  } else if (pv.mode === 'stream') {
+    on = pvPC?.connectionState === 'connected';
+    txt += ' · ' + (pvRetryTimer ? '重試中…' : (pvPC ? (PV_CONN[pvPC.connectionState] || '') : '未連線'));
+  }
+  const pill = $('pvStatus');
+  pill.textContent = txt;
+  pill.classList.toggle('on', on);
+
+  const note = $('pvNote');
+  note.textContent = (pv.mode === 'camera' || pv.mode === 'stream') ? pvErr : '';
+  note.classList.toggle('bad', !!note.textContent);
+}
+
+function pvApply() {
+  pvPaint();               // UI 先反應，來源再慢慢接
+  if (pv.mode !== 'camera') pvCamStop();
+  if (pv.mode !== 'stream') pvStreamStop();
+  if (pv.mode === 'camera') pvCamStart();
+  else if (pv.mode === 'stream') pvStreamConnect();
+}
+function pvSetMode(m) {
+  if (!PV_MODES.includes(m) || m === pv.mode) return;
+  pv.mode = m;
+  pvSave();
+  pvErr = '';
+  pvRetry = 0;
+  pvApply();
+}
+function pvStreamApply() {
+  pv.url = pvUrlIn.value.trim();
+  pvSave();
+  pvErr = '';
+  pvRetry = 0;
+  if (pv.mode === 'stream') pvStreamConnect();
+  else pvSetMode('stream');
+}
+
+for (const b of pvSeg.querySelectorAll('.seg-btn')) {
+  b.addEventListener('click', () => pvSetMode(b.dataset.bg));
+}
+pvCamSel.addEventListener('change', () => {
+  pv.camId = pvCamSel.value;
+  pvSave();
+  if (pv.mode === 'camera') pvCamStart();
+});
+$('pvCamRefresh').addEventListener('click', () => pvCamStart());
+$('pvStreamBtn').addEventListener('click', pvStreamApply);
+pvUrlIn.addEventListener('keydown', e => { if (e.key === 'Enter') pvStreamApply(); });
+$('pvMuteBtn').addEventListener('click', () => {
+  pvMuted = !pvMuted;
+  pvVideo.muted = pvMuted;
+  if (!pvMuted) pvVideo.play().catch(() => {});   // 這一下就是 user gesture，autoplay 政策放行
+  pvPaint();
+});
+/* 疊層開關走專案標準的「隱藏 checkbox ＋ seg」：seg 點擊由通用處理器寫進 checkbox 再
+ * 補送 change，動作一律從這個 listener 出去。checkbox 就是真值來源，所以檔案後面
+ * refresh() 尾端的 syncToggleSegs() 會照著它上色 —— 即使這個開關並不是 server state。 */
+$('pvOverlay').addEventListener('change', e => {
+  pv.overlay = e.target.checked;
+  pvSave();
+  pvPaint();
+});
+/* 插拔裝置／OBS 開關虛擬攝影機：還活著就只重列清單，斷了才整個重接 */
+navigator.mediaDevices?.addEventListener?.('devicechange', () => {
+  if (pv.mode !== 'camera') return;
+  if (pvCamStream && pvCamStream.getVideoTracks()[0]?.readyState === 'live') pvListCams().then(pvPaint);
+  else pvCamStart();
+});
+
+pvUrlIn.value = pv.url || '';
+/* 只寫 checkbox，seg 的上色交給後面那支 syncToggleSegs()（它在本檔更後面才跑） */
+$('pvOverlay').checked = pv.overlay;
+pvVideo.muted = pvMuted;
+pvApply();
+
+/* Several cards hold 2+ label+control rows whose labels differ in width
+ * (計分板 vs 名單, 小型/大型/全畫幅隊名, 流動速度/整體縮放/邊距 ...) — under plain
+ * flex:1 each control just fills whatever room its own row's label left it,
+ * so they end up different widths. Lock a family of controls to the NARROWEST
+ * one's natural width (that row's label leaves the least room, so nothing else
+ * can grow past it) — CSS (`.row > .seg.grow` / `.row > input[type=range]`)
+ * then pushes each flush to the row's right edge, so they line up.
+ *
+ * The two families are scoped differently ON PURPOSE:
+ *   segs   — per card. Each card carries its own scale and that reads fine.
+ *   ranges — PAGE-WIDE. Sliders are spread thin (進球動效 and 名單自動翻頁 hold
+ *            exactly one each), so per-card grouping skipped those cards and
+ *            left them at full width next to 橫幅自動隱藏's locked pair — the
+ *            mismatch Jason flagged. One global group makes every slider in the
+ *            panel the same length regardless of which card it sits in.
+ *
+ * Hidden tabs measure 0 and are excluded (setTab re-syncs when they show).
+ * Content is static text (never server state), so this only needs recomputing
+ * when the available width changes: tab switch, window resize, webfont swap. */
+function lockControlWidths(els) {
+  els.forEach(s => { s.style.flex = ''; });   // release before re-measuring
+  const live = els.filter(s => s.getBoundingClientRect().width > 0);
+  if (live.length < 2) return;
+  const w = Math.floor(Math.min(...live.map(s => s.getBoundingClientRect().width)));
+  if (w > 0) live.forEach(s => { s.style.flex = `0 0 ${w}px`; });
+}
+function syncSegWidths() {
+  document.querySelectorAll('.card').forEach(card => {
+    lockControlWidths([...card.querySelectorAll(':scope > .row > .seg.grow')]);
+  });
+  lockControlWidths([...document.querySelectorAll('.row > input[type="range"]')]);
+}
+window.addEventListener('resize', throttle(syncSegWidths, 120));
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(syncSegWidths).catch(() => {});
+
+/* ------------------------------------------------ 開關（checkbox ⇄ seg） */
+/* Every 開關 is a hidden checkbox + a 關閉/開啟 seg (same styling as every other
+ * seg in the panel). The CHECKBOX remains the single source of truth, so all the
+ * existing `$(id).checked = …` lines in refresh() and all the `change` listeners
+ * keep working untouched — the seg is purely its face. A click writes the box and
+ * re-dispatches `change`, so the action still leaves through the same handler. */
+function syncToggleSegs() {
+  document.querySelectorAll('.seg-toggle').forEach(seg => {
+    const box = $(seg.dataset.for);
+    if (!box) return;
+    seg.querySelectorAll('.seg-btn').forEach(b =>
+      b.classList.toggle('active', (b.dataset.val === '1') === box.checked));
+  });
+}
+for (const seg of document.querySelectorAll('.seg-toggle')) {
+  const box = $(seg.dataset.for);
+  if (!box) continue;
+  for (const b of seg.querySelectorAll('.seg-btn')) {
+    b.addEventListener('click', () => {
+      const on = b.dataset.val === '1';
+      if (box.checked === on) return;
+      box.checked = on;
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+      syncToggleSegs();   // paint immediately; the server echo confirms it
+    });
+  }
+}
+syncToggleSegs();   // paint the initial (unchecked) state before the first sync
+
+/* ------------------------------------------- 比賽面板快捷鍵 */
+/* One assignable key per interactive control on the 比賽 tab, PLUS one per 資訊橫幅
+ * preset. Every seg / chip option is its OWN binding that SELECTS that specific value
+ * (Jason: 不能是切換 seg，要指定選項) — triggering just clicks the native control (or
+ * the preset button), so all existing logic (actions, guards) is reused verbatim.
+ * Bindings live in SERVER state (state.hotkeys, settings-exported) so they persist and
+ * sync across admin clients (Jason 2026-07-17: 存 server.json). Shortcuts do NOT fire
+ * while a text field is focused (the lesson behind Jason removing the old global
+ * Space/1/2/B/E keys 2026-07-10 — accidental live triggers); they DO work from any tab,
+ * since the live controls are always in the DOM. */
+const HK_GROUPS = [
+  ['計時', [
+    ['tmToggle', '開始／暫停', '#startPause'],
+    ['tmReset', '重置計時', '#timerReset'],
+    ['tmM60', '計時 −1:00', '.adjust-row .btn[data-adj="-60000"]'],
+    ['tmM10', '計時 −0:10', '.adjust-row .btn[data-adj="-10000"]'],
+    ['tmM1', '計時 −0:01', '.adjust-row .btn[data-adj="-1000"]'],
+    ['tmP1', '計時 +0:01', '.adjust-row .btn[data-adj="1000"]'],
+    ['tmP10', '計時 +0:10', '.adjust-row .btn[data-adj="10000"]'],
+    ['tmP60', '計時 +1:00', '.adjust-row .btn[data-adj="60000"]'],
+    ['tmWClock', '字樣 → 比賽計時', '#modeSeg .seg-btn[data-mode="clock"]'],
+    ['tmWBreak', '字樣 → BREAK', '#modeSeg .seg-btn[data-mode="break"]'],
+    ['tmWPause', '字樣 → PAUSE', '#modeSeg .seg-btn[data-mode="pause"]'],
+    ['tmWEnd', '字樣 → MATCH END', '#modeSeg .seg-btn[data-mode="matchEnd"]'],
+  ]],
+  ['比分', [
+    ['scGoalA', '主隊 A · GOAL', '#goalA'],
+    ['scMinusA', '主隊 A · −1', '#minusA'],
+    ['scPlusA', '主隊 A · +1', '#plusA'],
+    ['scGoalB', '客隊 B · GOAL', '#goalB'],
+    ['scMinusB', '客隊 B · −1', '#minusB'],
+    ['scPlusB', '客隊 B · +1', '#plusB'],
+  ]],
+  ['畫面與節次', [
+    ['tierOff', '計分板 → 關閉', '#tierSeg .seg-btn[data-tier="off"]'],
+    ['tierSmall', '計分板 → 小型', '#tierSeg .seg-btn[data-tier="small"]'],
+    ['tierLarge', '計分板 → 大型', '#tierSeg .seg-btn[data-tier="large"]'],
+    ['tierFull', '計分板 → 全畫幅', '#tierSeg .seg-btn[data-tier="full"]'],
+    ['pd1', '節次 → 1ST HALF', '#periodChips .chip[data-p="1ST HALF"]'],
+    ['pd2', '節次 → 2ND HALF', '#periodChips .chip[data-p="2ND HALF"]'],
+    ['pdHT', '節次 → HALFTIME', '#periodChips .chip[data-p="HALFTIME"]'],
+    ['pdOT1', '節次 → OT 1', '#periodChips .chip[data-p="OT 1"]'],
+    ['pdOT2', '節次 → OT 2', '#periodChips .chip[data-p="OT 2"]'],
+    ['pdSO', '節次 → SHOOTOUT', '#periodChips .chip[data-p="SHOOTOUT"]'],
+    ['rmOff', '名單 → 關閉', '#rosterModeSeg .seg-btn[data-mode="off"]'],
+    ['rmA', '名單 → 主隊 A', '#rosterModeSeg .seg-btn[data-mode="A"]'],
+    ['rmB', '名單 → 客隊 B', '#rosterModeSeg .seg-btn[data-mode="B"]'],
+    ['rmBoth', '名單 → 全部', '#rosterModeSeg .seg-btn[data-mode="both"]'],
+    ['rPrev', '名單上一頁', '#rPagePrev'],
+    ['rNext', '名單下一頁', '#rPageNext'],
+  ]],
+  ['橫幅', [
+    ['ibShow', '資訊橫幅 · 顯示', '#ibShowBtn'],
+    ['ibHide', '資訊橫幅 · 隱藏', '#ibHideBtn'],
+    ['bbShow', '底部橫幅 · 顯示', '#bbShowBtn'],
+    ['bbHide', '底部橫幅 · 隱藏', '#bbHideBtn'],
+    ['bbSeqPlay', '底部序列 · 播放', '#bbSeqPlayBtn'],
+    ['bbSeqStop', '底部序列 · 停止', '#bbSeqStopBtn'],
+  ]],
+];
+/* every 資訊橫幅 preset gets a shortcut too — its target is the dynamically-created
+ * preset button (ibBtnByKey), so it carries a run() rather than a CSS selector.
+ * Pressing it FILLS the editor with that preset (re-press shows it, mirroring the
+ * button's own click behaviour). */
+HK_GROUPS.push(['資訊橫幅預設', IB_PRESETS.map(p => [
+  'ib:' + p.key,
+  (p.cat === 'CONTROL' ? '控制' : '裁判') + ' · ' + p.title,
+  { run: () => { const b = ibBtnByKey[p.key]; if (b) b.click(); } },
+])]);
+
+const HK_ITEMS = {};
+for (const [, items] of HK_GROUPS) for (const [id, label, target] of items) {
+  HK_ITEMS[id] = (typeof target === 'string') ? { label, sel: target } : { label, run: target.run };
+}
+
+let hkBindings = {};            // mirror of state.hotkeys (server is the source of truth)
+let lastHkJson = '';            // last synced server map, to skip redundant re-renders
+let hkRec = null;               // action id currently recording a key
+let hkFlashId = null, hkFlashMsg = '';
+let hkFlashTimer = 0;
+
+/* push the whole map to the server (it replaces state.hotkeys wholesale); set
+ * lastHkJson so our own echo doesn't trigger a needless re-render */
+function hkPush() {
+  lastHkJson = JSON.stringify(hkBindings);
+  act('hotkeys.set', { hotkeys: hkBindings });
+}
+/* pull server state into the card (skipped mid-recording so it can't clobber it) */
+function hkSyncFromState(s) {
+  if (hkRec) return;
+  const hj = JSON.stringify(s.hotkeys || {});
+  if (hj === lastHkJson) return;
+  lastHkJson = hj;
+  hkBindings = JSON.parse(hj);
+  renderHotkeys();
+}
+const HK_MOD_CODES = new Set(['ShiftLeft', 'ShiftRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight', 'MetaLeft', 'MetaRight']);
+function hkCombo(e) {
+  const m = [];
+  if (e.ctrlKey) m.push('Ctrl');
+  if (e.altKey) m.push('Alt');
+  if (e.shiftKey) m.push('Shift');
+  m.push(e.code);
+  return m.join('+');
+}
+const HK_KEYNAMES = {
+  ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓',
+  Space: 'Space', Escape: 'Esc', Enter: 'Enter', Tab: 'Tab', Backspace: '⌫',
+  Minus: '-', Equal: '=', Comma: ',', Period: '.', Slash: '/', Backslash: '\\',
+  BracketLeft: '[', BracketRight: ']', Semicolon: ';', Quote: "'", Backquote: '`',
+};
+function hkKeyLabel(combo) {
+  return combo.split('+').map(p => {
+    if (p.startsWith('Key')) return p.slice(3);
+    if (p.startsWith('Digit')) return p.slice(5);
+    if (p.startsWith('Numpad')) return 'Num' + p.slice(6);
+    return HK_KEYNAMES[p] || p;
+  }).join('+');
+}
+function hkFlash(id, msg) {
+  hkFlashId = id; hkFlashMsg = msg;
+  clearTimeout(hkFlashTimer);
+  hkFlashTimer = setTimeout(() => { hkFlashId = null; hkFlashMsg = ''; renderHotkeys(); }, 2200);
+  renderHotkeys();
+}
+function renderHotkeys() {
+  const host = $('hkList');
+  if (!host) return;
+  host.innerHTML = '';
+  for (const [title, items] of HK_GROUPS) {
+    const g = document.createElement('div');
+    g.className = 'hk-group';
+    const h = document.createElement('div');
+    h.className = 'hk-group-title';
+    h.textContent = title;
+    g.append(h);
+    for (const [id, label] of items) {
+      const row = document.createElement('div');
+      row.className = 'hk-row' + (hkRec === id ? ' rec' : '') + (hkFlashId === id ? ' clash' : '');
+      const lb = document.createElement('span');
+      lb.className = 'hk-label';
+      lb.textContent = label;
+      const key = document.createElement('span');
+      const bound = hkBindings[id];
+      if (hkRec === id) { key.className = 'hk-key'; key.textContent = '按鍵…'; }
+      else if (bound) { key.className = 'hk-key'; key.textContent = hkKeyLabel(bound); }
+      else { key.className = 'hk-key empty'; key.textContent = '未設定'; }
+      const set = document.createElement('button');
+      set.className = 'hk-set';
+      set.textContent = hkRec === id ? '取消' : '設定';
+      set.addEventListener('click', () => { hkRec = hkRec === id ? null : id; renderHotkeys(); });
+      row.append(lb, key, set);
+      if (hkFlashId === id) {
+        const fl = document.createElement('span');
+        fl.className = 'hk-flash';
+        fl.textContent = hkFlashMsg;
+        row.append(fl);
+      } else if (bound && hkRec !== id) {
+        const clr = document.createElement('button');
+        clr.className = 'hk-clear';
+        clr.textContent = '清除';
+        clr.addEventListener('click', () => { delete hkBindings[id]; hkPush(); renderHotkeys(); });
+        row.append(clr);
+      }
+      g.append(row);
+    }
+    host.append(g);
+  }
+}
+$('hkClearAll').addEventListener('click', () => {
+  if (!Object.keys(hkBindings).length) return;
+  if (confirm('清除所有快捷鍵綁定？')) { hkBindings = {}; hkPush(); hkRec = null; renderHotkeys(); }
+});
+window.addEventListener('keydown', e => {
+  /* recording a new binding — capture the next real key, reject conflicts */
+  if (hkRec) {
+    if (HK_MOD_CODES.has(e.code)) return;   // a bare modifier — wait for the real key
+    e.preventDefault();
+    if (e.code === 'Escape') { hkRec = null; renderHotkeys(); return; }
+    const combo = hkCombo(e);
+    const clashId = Object.keys(hkBindings).find(k => hkBindings[k] === combo && k !== hkRec);
+    if (clashId) { hkFlash(hkRec, '衝突：已用於「' + (HK_ITEMS[clashId] ? HK_ITEMS[clashId].label : clashId) + '」'); return; }
+    hkBindings[hkRec] = combo;
+    hkPush();
+    hkRec = null;
+    renderHotkeys();
+    return;
+  }
+  /* dispatch — never while typing in a field */
+  const a = document.activeElement;
+  if (a && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable)) return;
+  const combo = hkCombo(e);
+  const id = Object.keys(hkBindings).find(k => hkBindings[k] === combo);
+  const item = id && HK_ITEMS[id];
+  if (!item) return;
+  if (item.run) { e.preventDefault(); item.run(); return; }
+  const el = document.querySelector(item.sel);
+  if (!el) return;
+  e.preventDefault();
+  el.click();
+});
+renderHotkeys();
+
+/* ------------------------------------------------------------ tabs */
+
+const TAB_KEY = 'sbx.tab';
+function setTab(name) {
+  if (!document.getElementById('tab-' + name)) name = 'live';
+  document.querySelectorAll('#tabbar .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab-page').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  try { localStorage.setItem(TAB_KEY, name); } catch {}
+  fitPreview();   // the frame only has real dimensions while its tab shows
+  syncSegWidths();   // ditto — a hidden tab's cards measure 0 width
+}
+document.querySelectorAll('#tabbar .tab-btn').forEach(b => {
+  b.addEventListener('click', () => setTab(b.dataset.tab));
+});
+let savedTab = 'live';
+try { savedTab = localStorage.getItem(TAB_KEY) || 'live'; } catch {}
+setTab(savedTab);
 
 /* ------------------------------------------------------------ loop */
 
@@ -1394,17 +2636,19 @@ function loop() {
   const durS = Math.floor(st.timer.durationMs / 1000);
   const durTxt = ` / ${Math.floor(durS / 60)}:${String(durS % 60).padStart(2, '0')}`;
   if ($('timerDur').textContent !== durTxt) $('timerDur').textContent = durTxt;
-  const qc = $('qClock');
-  const qTxt = word || fmtClockShort(display, dir);
-  if (qc.textContent !== qTxt) qc.textContent = qTxt;
-  qc.classList.toggle('word', !!word);
-  qc.classList.toggle('urgent', !word && rem <= 60000);
   /* live 2-min suspension countdowns in the active-icon list */
   document.querySelectorAll('.ab-count[data-msleft]').forEach(n => {
     const msLeft = +n.dataset.msleft;
     const running = n.dataset.running === '1';
     const ref = +n.dataset.ref;
     const left = Math.max(0, Math.min(120000, running ? msLeft - (serverNow() - ref) : msLeft));
+    const s = Math.ceil(left / 1000);
+    const t = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    if (n.textContent !== t) n.textContent = t;
+  });
+  /* live team-timeout countdowns (real time) */
+  document.querySelectorAll('.ab-count[data-endsat]').forEach(n => {
+    const left = Math.max(0, Math.min(60000, +n.dataset.endsat - serverNow()));
     const s = Math.ceil(left / 1000);
     const t = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     if (n.textContent !== t) n.textContent = t;
@@ -1428,6 +2672,7 @@ connect({
     matchesSummary = msg.matches || [];
     activeMatchId = msg.activeMatchId || null;
     assetsList = msg.assets || { banner: [], corner: [] };
+    bbSeqRunInfo = msg.bbSeqRun || null;
     refresh(msg.state);
     renderMatches();
   },

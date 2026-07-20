@@ -22,6 +22,7 @@
  */
 import { buildPalette, facetSVG, hexToRgba, relLuminance } from '/shared/palette.js';
 import { connect, act, serverNow } from '/shared/net.js';
+import { buildReplayModel, reconstructAt, appliedMarkCount, replayHead, markLabel } from '/shared/replay.js';
 
 /* ================================================================ dom */
 
@@ -578,10 +579,16 @@ function refreshEvent(v) {
 }
 
 /* PREPARING shows a fixed 'PREPARE TO START' in the full board's period pill —
- * a display-only override; state.period.text is never touched. */
+ * a display-only override; state.period.text is never touched. 回放同理：節次
+ * 膠囊顯示 REPLAY（琥珀樣式＝「計時器樣式改成 REPLAY」），節次文字不動。 */
 function periodTextFor(v) {
+  if (st && st.replay && st.replay.active) return 'REPLAY';
   if (v === fullV && st && st.board.tier === 'preparing') return 'PREPARE TO START';
   return (st.period.text || '').toUpperCase();
+}
+/* 節次膠囊是否佔位：回放中強制顯示（REPLAY 是模式標識，蓋過節次隱藏設定） */
+function periodShownFor(s) {
+  return !!(s && (s.period.visible || (s.replay && s.replay.active)));
 }
 
 /* ------------------------------------------- main-board width choreography */
@@ -662,9 +669,15 @@ function swapMainNamesMorph() {
 
 /* 2026-07-17: the old display-side auto full-frame (board.autoExpandBreak +
  * wordConditionActive) is gone — the server's 計時聯動 automation now switches
- * board.tier itself (and restores it on resume), so the tier is always literal. */
+ * board.tier itself (and restores it on resume), so the tier is always literal.
+ * 回放中改用 replay.tier（僅 off | small | large — 全畫幅在回放不可用），現場
+ * board.tier 原封不動，結束回放即還原。 */
 function effTier() {
   if (!st) return 'off';
+  if (st.replay && st.replay.active) {
+    const t = st.replay.tier;
+    return t === 'off' || t === 'small' || t === 'large' ? t : 'large';
+  }
   return st.board.tier;   // off | small | large | full (goal expansion is per-row, not a tier change)
 }
 
@@ -680,13 +693,15 @@ function setRowClass(t, mode) {
 function clearRowExpands() {
   for (const t of ['A', 'B']) { rowExpand[t] = false; clearTimeout(rowExpandTimer[t]); }
 }
-/* reconcile every per-row class + grid track + the width cap to the current state (instant) */
+/* reconcile every per-row class + grid track + the width cap to the current state (instant)
+ * （回放隱藏比分時行高恆為 0 — applyScoresHidden 擁有行高，這裡只同步 class） */
 function applyRowModes() {
   boardEl.classList.toggle('cap-width', anyRowLarge());
   for (const t of ['A', 'B']) {
     const mode = rowModeFor(t);
     setRowClass(t, mode);
-    boardEl.style.setProperty(t === 'A' ? '--row-a' : '--row-b', mode === 'large' ? '150px' : '56px');
+    boardEl.style.setProperty(t === 'A' ? '--row-a' : '--row-b',
+      scoresHiddenShown ? '0px' : (mode === 'large' ? '150px' : '56px'));
     fitName(mainV, t);
     setFlag(mainV, t);
   }
@@ -819,6 +834,12 @@ function themeMorphRow(v, t, expand) {
  * AND partial goal expansion (only the scoring row). */
 function morphBoard() {
   const v = mainV;
+  /* 回放隱藏比分中：行高恆為 0，只同步 class／寬度上限（重新顯示比分時再展開） */
+  if (scoresHiddenShown) {
+    for (const t of ['A', 'B']) setRowClass(t, rowModeFor(t));
+    boardEl.classList.toggle('cap-width', anyRowLarge());
+    return;
+  }
   const tok = bump('morph');
   const want = t => rowModeFor(t);
   const changed = ['A', 'B'].filter(t => currentRowMode(t) !== want(t));
@@ -1155,6 +1176,7 @@ function clockString(ms, direction, remaining) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 function clockWordFor(s, kind) {
+  if (s.replay && s.replay.active) return null;   // 回放：恆顯時間（人手控制），不出字樣
   const t = s.timer;
   if (t.mode === 'break') return 'BREAK';
   if (t.mode === 'matchEnd') {
@@ -1174,6 +1196,7 @@ function clockWordFor(s, kind) {
 /* the underlying MAIN-board clock word, ignoring the alternate blink — so a reserved width
  * stays stable while PAUSE / END flashes on and off */
 function mainClockWord(s) {
+  if (s.replay && s.replay.active) return null;   // 回放不出字樣 — 釋放預留寬度
   const t = s.timer;
   if (t.mode === 'break') return 'BREAK';
   if (t.mode === 'matchEnd') return 'END';
@@ -1345,6 +1368,7 @@ async function goalWordShow(v, team) {
 
 function onGoalFx(team, score, delta = 1) {
   if (!st) return;
+  if (st.replay && st.replay.active) return;   // 回放中比分由重建驅動 — 現場進球特效全面抑制
   const eff = effTier();
   if (eff === 'off' || eff === 'preparing') {   // scores hidden — update quietly, no celebration
     for (const v of views) updateScoreSilent(v, team, score);
@@ -1566,7 +1590,7 @@ function suspFinish(wrap, { instant = false } = {}) {
 
 function updateIconPhases() {
   if (!st) return;
-  for (const b of st.banners) {
+  for (const b of displayedBanners()) {   // 回放中相位跑在重建清單上（標籤 5s 收合等）
     const wrap = iconEls.get(b.id);
     if (!wrap) continue;
     if (wrap.cdTape) {   // SUSP2 always; TIMEOUT when the countdown automation is on
@@ -2041,6 +2065,7 @@ function rosterPageFor(t) {
 }
 function rosterWantVisible(t) {
   if (!st) return false;
+  if (st.replay && st.replay.active) return false;   // 回放擁有整個畫面 — 名單讓位
   if (st.infoBanner) return false;   // the info banner owns the screen while shown — panels give way
   const mode = (st.rosterDisplay && st.rosterDisplay.mode) || 'off';
   if (mode !== 'both' && mode !== t) return false;
@@ -2545,6 +2570,7 @@ function bbSetOrgMask() {
  * gone (DOM-based → the card returns after their exit completes) */
 function bbBlocked() {
   if (!st) return true;
+  if (st.replay && st.replay.active) return true;   // 回放中底部橫幅讓位（底部屬於圓弧時間軸）
   if (effTier() === 'full' || !fullEl.classList.contains('is-hidden')) return true;
   for (const t of ['A', 'B']) {
     if (rosterWantVisible(t) || !rosterEls[t].root.classList.contains('is-hidden')) return true;
@@ -2809,6 +2835,374 @@ function updateCornerLogos({ instant = false } = {}) {
   }
 }
 
+/* ============================================================ replay */
+/* 回放（REPLAY）顯示層。播放頭（UTC 假時間）由伺服器擁有；本層以
+ * /shared/replay.js 從對局日誌倒推任意時刻的 比分／事件圖標／資訊橫幅，
+ * 計時器不受影響（人手控制照舊，clockWordFor 在回放中恆回 null）。
+ *   · 重建用「真值」播放頭 — 跨過事件點的那一幀計分板立刻更新；
+ *   · 圓弧時間軸用「平滑」播放頭（指數趨近）— 跳轉／播放都平滑滑動，
+ *     按下繼續後標記在一秒左右滑過針尖（Jason: 一秒內穿過時間點）。
+ * 事件點語義（與 server.js / replay.js 一致）：head > utc 才算已發生。 */
+
+let rpModel = buildReplayModel([]);
+let rpActive = false;             // 畫面上的回放狀態（st.replay.active 的已套用鏡像）
+let rpApplied = 0;                // 已越過的事件點數（跨點偵測）
+let rpBanners = [];               // 最後一次重建的事件圖標清單（displayedBanners 用）
+let rpIconBorn = new Map();       // 圖標 id -> 首次上畫時刻（標籤 5s 收合跑真實時間）
+let rpHeadShown = 0;              // 平滑顯示頭（圓弧）
+let rpHeadReady = false;
+let rpPrevTs = 0;
+let scoresHiddenShown = false;    // 「隱藏比分」目前的視覺狀態
+let rpRowsTok = 0;
+
+const clampN = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+function displayedBanners() { return rpActive ? rpBanners : (st ? st.banners : []); }
+function wantArc() {
+  return rpActive && st && st.replay
+    && st.replay.showScores !== false && st.replay.tier !== 'off';
+}
+
+/* REPLAY 徽章：#board 掛 .replaying（琥珀節次膠囊＋琥珀時間），節次字換 REPLAY */
+function setReplayBadge(on, { instant = false } = {}) {
+  boardEl.classList.toggle('replaying', on);
+  for (const v of views) swapWord(v.periodBox, periodTextFor(v), { instant: instant || !v.visible });
+}
+
+/* 隱藏比分（不顯示的話就只剩時間和賽事名稱）：兩隊列淡出並收合到 0，收合後移出
+ * 佈局讓板寬滑到只剩賽事名＋時間；顯示時鏡像展開。行高變數的所有權在收合期間
+ * 屬於這裡（applyRowModes / morphBoard 都已讓路）。 */
+function applyScoresHidden(hide, { instant = false, force = false } = {}) {
+  if (!force && scoresHiddenShown === hide) return;
+  scoresHiddenShown = hide;
+  const v = mainV;
+  const tok = ++rpRowsTok;
+  boardEl.classList.toggle('no-scores', hide);
+  const restFor = t => (rowModeFor(t) === 'large' ? 150 : 56);
+  if (instant || !v.visible) {
+    boardEl.classList.remove('no-scores-anim');
+    for (const t of ['A', 'B']) {
+      cancelRun(v.grid, 'row-' + t);
+      cancelRun(v.teams[t].root, 'rpfade');
+      v.grid.style.removeProperty(t === 'A' ? '--row-a' : '--row-b');
+      boardEl.style.setProperty(t === 'A' ? '--row-a' : '--row-b', hide ? '0px' : restFor(t) + 'px');
+      v.teams[t].root.style.opacity = hide ? '0' : '';
+      v.teams[t].root.style.display = hide ? 'none' : '';
+    }
+    return;
+  }
+  boardEl.classList.add('no-scores-anim');   // 收合／展開期間裁掉溢出的隊列內容
+  if (hide) {
+    for (const t of ['A', 'B']) {
+      const varName = t === 'A' ? '--row-a' : '--row-b';
+      v.teams[t].root.style.display = '';
+      const from = teamRowPx(t);
+      cancelRun(v.grid, 'row-' + t);
+      boardEl.style.setProperty(varName, '0px');
+      run(v.grid, 'row-' + t, [{ [varName]: from + 'px' }, { [varName]: '0px' }],
+        { duration: 620, easing: OUT_5, fill: 'none' });
+      run(v.teams[t].root, 'rpfade', [{ opacity: 1 }, { opacity: 0 }],
+        { duration: 240, easing: EXIT, fill: 'forwards' });
+    }
+    setTimeout(() => {
+      if (rpRowsTok !== tok || !scoresHiddenShown) return;
+      glideWidthAround(() => {
+        for (const t of ['A', 'B']) v.teams[t].root.style.display = 'none';
+      });
+      boardEl.classList.remove('no-scores-anim');
+    }, 660);
+  } else {
+    glideWidthAround(() => {
+      for (const t of ['A', 'B']) v.teams[t].root.style.display = '';
+    });
+    for (const t of ['A', 'B']) {
+      const varName = t === 'A' ? '--row-a' : '--row-b';
+      const to = restFor(t);
+      cancelRun(v.grid, 'row-' + t);
+      boardEl.style.setProperty(varName, to + 'px');
+      run(v.grid, 'row-' + t, [{ [varName]: '0px' }, { [varName]: to + 'px' }],
+        { duration: 620, easing: OUT_5, fill: 'none' });
+      run(v.teams[t].root, 'rpfade', [{ opacity: 0 }, { opacity: 1 }],
+        { duration: 320, delay: 250, easing: OUT_5, fill: 'backwards' });
+    }
+    setTimeout(() => {
+      if (rpRowsTok === tok && !scoresHiddenShown) boardEl.classList.remove('no-scores-anim');
+    }, 720);
+  }
+}
+
+/* 進出場的無縫比對：重建 id（rp 前綴）與現場 id 必然不同，若內容其實一樣，
+ * 讓 renderIcons／renderInfoBanner 帶動畫換源會平白閃一次 — 內容相同就走瞬時。 */
+const iconsSig = list => (list || []).map(b => b.team + ':' + b.type).sort().join(',');
+const infoSig = ib => (ib ? [ib.cat, ib.title, ib.body, ib.tone, ib.fg].join('|') : '');
+let rpLastInfo = null;   // 最後一次重建顯示的橫幅（出場比對用）
+
+/* 把播放頭當下的重建結果套上畫面。pop = 播放跨過進球（比分帶彈跳＋輕 punch，
+ * 不放彩帶 — 回放講究克制）；instant = 首繪／重連（全部靜默）；
+ * seamFrom = { icons, info } 目前畫面上的現場內容（進場無縫比對）。 */
+function applyReconstruction({ instant = false, pop = false, seamFrom = null } = {}) {
+  if (!st || !st.replay) return;
+  const h = replayHead(st.replay, serverNow());
+  const rec = reconstructAt(rpModel, h);
+  rpApplied = appliedMarkCount(rpModel, h);
+  const iconsInstant = instant || !!(seamFrom && iconsSig(seamFrom.icons) === iconsSig(rec.banners));
+  const infoInstant = instant || !!(seamFrom && infoSig(seamFrom.info) === infoSig(rec.infoBanner));
+  /* 圖標：id 穩定（rp+日誌條目 id）→ renderIcons 自然做進出動畫。首次上畫時刻
+   * 記在 rpIconBorn — 播放中新出現的圖標會走「標籤亮 5 秒再收合」的正常節奏，
+   * 跳轉／首繪／無縫換源出現的一律直接收合（createdAt 0）。 */
+  const born = new Map();
+  rpBanners = rec.banners.map(b => {
+    const at = rpIconBorn.has(b.id) ? rpIconBorn.get(b.id)
+      : (instant || iconsInstant || !mainV.visible ? 0 : Date.now());
+    born.set(b.id, at);
+    return { id: b.id, team: b.team, type: b.type, createdAt: at };
+  });
+  rpIconBorn = born;
+  for (const t of ['A', 'B']) {
+    const val = String(rec.scores[t]);
+    const prev = Number(mainV.scoreTapes[t].text || '0');
+    const changed = val !== mainV.scoreTapes[t].text;
+    const dir = rec.scores[t] >= prev ? 1 : -1;
+    const setMain = () => mainV.scoreTapes[t].set(val, {
+      dir, anim: !instant && mainV.visible && !scoresHiddenShown, pop,
+    });
+    if (!instant && mainV.visible) glideWidthAround(setMain); else setMain();
+    fullV.scoreTapes[t].set(val, { anim: false });
+    if (pop && changed && !instant && mainV.visible && !scoresHiddenShown) {
+      run(mainV.teams[t].score, 'punch', [
+        { transform: 'scale(1)' },
+        { transform: 'scale(1.14)', offset: 0.3 },
+        { transform: 'scale(1)' },
+      ], { duration: POP.dur, easing: POP.easing, composite: 'add' });
+    }
+  }
+  renderIcons(rpBanners, { instant: iconsInstant });
+  renderInfoBanner(rec.infoBanner, { instant: infoInstant });
+  rpLastInfo = rec.infoBanner;
+}
+
+/* 進出場（確保最佳視覺切換）：進場停在時間軸終點（重建＝終局＝現場值，畫面
+ * 零跳變），之後由操作者跳轉；出場把比分／圖標／橫幅滾回現場值。 */
+function enterReplayFx({ instant = false } = {}) {
+  rpActive = true;
+  rpPrevTs = 0;
+  rpHeadReady = false;
+  setReplayBadge(true, { instant });
+  clearRowExpands();          // 進球展開屬於現場 — 清乾淨再進回放
+  if (!scoresHiddenShown) morphBoard();
+  applyTier({ instant });
+  applyScoresHidden(st.replay.showScores === false, { instant });
+  applyReconstruction({ instant, seamFrom: { icons: st.banners, info: st.infoBanner } });
+  arcSetVisible(wantArc(), { instant });
+}
+function exitReplayFx({ instant = false } = {}) {
+  rpActive = false;
+  const seamIcons = iconsSig(rpBanners) === iconsSig(st.banners);
+  const seamInfo = infoSig(rpLastInfo) === infoSig(st.infoBanner);
+  setReplayBadge(false, { instant });
+  applyScoresHidden(false, { instant });
+  applyTier({ instant });
+  for (const t of ['A', 'B']) {
+    const val = String(st.teams[t].score);
+    const prev = Number(mainV.scoreTapes[t].text || '0');
+    const dir = st.teams[t].score >= prev ? 1 : -1;
+    const set = () => { for (const v of views) v.scoreTapes[t].set(val, { dir, anim: !instant && v.visible }); };
+    if (!instant && mainV.visible) glideWidthAround(set); else set();
+  }
+  renderIcons(st.banners, { instant: instant || seamIcons });
+  renderInfoBanner(st.infoBanner, { instant: instant || seamInfo });
+  rpBanners = [];
+  rpIconBorn = new Map();
+  rpLastInfo = null;
+  arcSetVisible(false, { instant });
+}
+
+/* 每幀：跨點偵測（重建立即）＋平滑顯示頭＋圓弧繪製 */
+function replayFrame(now) {
+  const r = st.replay;
+  const dt = rpPrevTs ? Math.min(0.05, (now - rpPrevTs) / 1000) : 0.016;
+  rpPrevTs = now;
+  let h = replayHead(r, serverNow());
+  if (!rpModel.empty) h = Math.min(h, rpModel.t1);
+  const n = appliedMarkCount(rpModel, h);
+  if (n !== rpApplied) {
+    const prev = rpApplied;
+    const crossFwd = r.playing && n > prev && n - prev <= 3;   // 播放跨點（跳轉不展開）
+    applyReconstruction({ pop: crossFwd });
+    if (crossFwd) for (let i = prev; i < n; i++) arcExpandMark(rpModel.marks[i]);
+  }
+  if (!rpHeadReady) { rpHeadShown = h; rpHeadReady = true; }
+  else rpHeadShown += (h - rpHeadShown) * Math.min(1, dt * 6);   // 指數趨近：跳轉半秒滑到位
+  arcFrame(dt);
+}
+
+/* ------------------------------------------------- 圓弧時間軸（overlay） */
+/* 底部置中的錶盤：針尖固定在弧頂，標記（進球＝隊色圓點、橫幅＝色底驚嘆號）
+ * 隨時間流沿弧滑過。視窗自適應（目標 ~5 個標記在畫面內，平滑縮放），刻度
+ * 依窗寬選檔，讓時間流動永遠看得見。幾何常數與 overlay.css 的 .ra-needle
+ * 位置（960 / 966）保持一致。 */
+const ARC_R = 2600;
+const ARC_APEX_Y = 966;
+const ARC_CX = 960;
+const ARC_CY = ARC_APEX_Y + ARC_R;      // 圓心（畫面下方）
+const ARC_THETA = 0.2565;               // 半跨角（弦寬約 1320px）
+const ARC_W_MIN = 45000;                // 最窄 45s — 流動明顯（不要縮放太小）
+const ARC_W_MAX = 420000;               // 最寬 7min
+const ARC_W_DEF = 150000;
+const ARC_TICK_STEPS = [5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000];
+const ARC_LEN_PX = 2 * ARC_THETA * ARC_R;
+
+const arcEl = document.getElementById('replayarc');
+const arcMarksHost = arcEl.querySelector('.ra-marks');
+const arcTicksG = arcEl.querySelector('.ra-ticks');
+const arcMarkEls = new Map();           // mark id -> node
+const arcTickPool = [];
+let arcShown = false;
+let arcInTok = 0;
+let rpW = ARC_W_DEF;                    // 平滑視窗寬（ms）
+
+function arcPoint(phi, r = ARC_R) {
+  return [ARC_CX + r * Math.sin(phi), ARC_CY - r * Math.cos(phi)];
+}
+function arcPathD(a0, a1) {
+  const [x0, y0] = arcPoint(a0);
+  const [x1, y1] = arcPoint(a1);
+  return `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${ARC_R} ${ARC_R} 0 0 ${a1 > a0 ? 1 : 0} ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+}
+{ // 靜態幾何：底線整段；已過段（左）與未來段（右）都從弧頂畫出（進場描線由中心展開）
+  arcEl.querySelector('.ra-under').setAttribute('d', arcPathD(-ARC_THETA, ARC_THETA));
+  arcEl.querySelector('.ra-past').setAttribute('d', arcPathD(0, -ARC_THETA));
+  arcEl.querySelector('.ra-future').setAttribute('d', arcPathD(0, ARC_THETA));
+  for (let i = 0; i < 30; i++) {
+    const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    l.setAttribute('opacity', '0');
+    arcTicksG.append(l);
+    arcTickPool.push(l);
+  }
+}
+
+const RA_BALL_SVG = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <circle cx="12" cy="12" r="8.6" fill="none" stroke="currentColor" stroke-width="2.4"/>
+  <path d="M6 7.6c3 2.3 9 2.3 12 0M6 16.4c3-2.3 9-2.3 12 0" fill="none" stroke="currentColor" stroke-width="1.9"/>
+</svg>`;
+const escHtml = s => String(s ?? '').replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/* 重建標記節點（日誌模型更新時整批重建；數量小，重建便宜） */
+function arcMarksRebuild() {
+  arcMarkEls.clear();
+  arcMarksHost.innerHTML = '';
+  rpModel.marks.forEach((mk, i) => {
+    const el = document.createElement('div');
+    el.className = 'ra-mk ' + (mk.kind === 'goal' ? 'kind-goal' : 'kind-info');
+    el.style.setProperty('--mk-d', String(Math.min(i * 36, 540)));
+    const dot = document.createElement('span');
+    dot.className = 'ra-dot';
+    if (mk.kind === 'goal') {
+      const pal = palettes[mk.team];
+      el.style.setProperty('--mk-bg', pal.base);
+      el.style.setProperty('--mk-ink', pal.ink);
+      dot.innerHTML = RA_BALL_SVG;
+    } else {
+      el.style.setProperty('--mk-bg', mk.tone);
+      el.style.setProperty('--mk-ink', mk.fg);
+      dot.innerHTML = '<b>!</b>';
+    }
+    const lb = markLabel(mk, st ? st.teams : null);
+    const cap = document.createElement('span');
+    cap.className = 'ra-cap';
+    cap.innerHTML = `<b>${escHtml(lb.head)}</b><span>${escHtml(lb.text)}</span>`;
+    el.append(dot, cap);
+    el.style.display = 'none';
+    el._vis = false;
+    arcMarksHost.append(el);
+    arcMarkEls.set(mk.id, el);
+  });
+}
+
+/* 跨過事件點：標記展開成說明膠囊（GOAL→那隊進球幾比幾；!→判罰標題），4.6s 後收回 */
+function arcExpandMark(mk) {
+  const el = arcMarkEls.get(mk.id);
+  if (!el || !arcShown) return;
+  el.classList.add('expanded');
+  el._exp = true;
+  clearTimeout(el._expT);
+  el._expT = setTimeout(() => { el.classList.remove('expanded'); el._exp = false; }, 4600);
+}
+
+/* 自適應視窗：取離播放頭第 k 近（k ≤ 5）標記的距離 ×2.35 → 同屏 4-6 個標記 */
+function arcTargetW(h) {
+  const marks = rpModel.marks;
+  if (marks.length < 2) return ARC_W_DEF;
+  const d = marks.map(mk => Math.abs(mk.utc - h)).sort((a, b) => a - b);
+  const k = Math.min(5, d.length);
+  return clampN(d[k - 1] * 2.35, ARC_W_MIN, ARC_W_MAX);
+}
+
+function arcFrame(dt) {
+  if (!arcShown) return;
+  rpW += (arcTargetW(rpHeadShown) - rpW) * Math.min(1, dt * 2.4);   // 平滑縮放
+  /* 刻度：檔位選到弧上間距 ≥ 78px，隨時間左移 — 流動感的主要來源 */
+  let step = ARC_TICK_STEPS[ARC_TICK_STEPS.length - 1];
+  for (const s of ARC_TICK_STEPS) { if (s / rpW * ARC_LEN_PX >= 78) { step = s; break; } }
+  let i = 0;
+  const first = Math.ceil((rpHeadShown - rpW * 0.55) / step) * step;
+  for (let t = first; t <= rpHeadShown + rpW * 0.55 && i < arcTickPool.length; t += step, i++) {
+    const line = arcTickPool[i];
+    const frac = (t - rpHeadShown) / rpW;
+    const phi = frac * 2 * ARC_THETA;
+    const fade = clampN(1 - Math.max(0, (Math.abs(frac) - 0.34) / 0.14), 0, 1);
+    const [x1, y1] = arcPoint(phi, ARC_R - 8);
+    const [x2, y2] = arcPoint(phi, ARC_R + 8);
+    line.setAttribute('x1', x1.toFixed(1)); line.setAttribute('y1', y1.toFixed(1));
+    line.setAttribute('x2', x2.toFixed(1)); line.setAttribute('y2', y2.toFixed(1));
+    line.setAttribute('opacity', (0.5 * fade).toFixed(3));
+  }
+  for (; i < arcTickPool.length; i++) arcTickPool[i].setAttribute('opacity', '0');
+  /* 標記：沿弧定位＋邊緣淡出＋近針放大＋過去/未來著色 */
+  const marks = rpModel.marks;
+  for (let j = 0; j < marks.length; j++) {
+    const el = arcMarkEls.get(marks[j].id);
+    if (!el) continue;
+    const frac = (marks[j].utc - rpHeadShown) / rpW;
+    if (Math.abs(frac) > 0.53 && !el._exp) {
+      if (el._vis) { el.style.display = 'none'; el._vis = false; }
+      continue;
+    }
+    if (!el._vis) { el.style.display = ''; el._vis = true; }
+    const phi = clampN(frac, -0.6, 0.6) * 2 * ARC_THETA;
+    const [x, y] = arcPoint(phi);
+    el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    el.style.opacity = clampN(1 - (Math.abs(frac) - 0.36) / 0.14, 0, 1).toFixed(3);
+    const prox = Math.max(0, 1 - Math.abs(x - ARC_CX) / 300);
+    el.style.setProperty('--mk-s', (1 + prox * 0.24).toFixed(3));
+    el.classList.toggle('future', j >= rpApplied);
+  }
+}
+
+function arcSetVisible(on, { instant = false } = {}) {
+  if (arcShown === on) return;
+  arcShown = on;
+  const tok = ++arcInTok;
+  if (on) rpHeadReady = false;   // 進場直接落在目標位置，不做長距離滑移
+  if (instant) {
+    arcEl.classList.add('ra-snap');
+    arcEl.classList.remove('ra-in');
+    arcEl.classList.toggle('ra-hidden', !on);
+    void arcEl.offsetWidth;
+    arcEl.classList.remove('ra-snap');
+    return;
+  }
+  if (on) {
+    arcEl.classList.remove('ra-hidden');
+    arcEl.classList.add('ra-in');    // 弧線從中心向兩端描出＋標記交錯浮現
+    setTimeout(() => { if (tok === arcInTok) arcEl.classList.remove('ra-in'); }, 1400);
+  } else {
+    arcEl.classList.remove('ra-in');
+    arcEl.classList.add('ra-hidden');
+  }
+}
+
 /* ========================================================== renderer */
 
 function applyBoardVars(s) {
@@ -2840,7 +3234,7 @@ function renderAllView(v, s) {
   toggleCell(v.boxClock, clk, 'y', { instant: true });
   // period collapses vertically with the clock row, horizontally on its own
   toggleCell(v.boxPeriod, clk, 'y', { instant: true });
-  toggleCell(v.boxPeriod, s.period.visible, 'x', { instant: true });
+  toggleCell(v.boxPeriod, periodShownFor(s), 'x', { instant: true });
   swapWord(v.eventBox, eventTextFor(v), { instant: true });
   fitEvent(v);
   swapWord(v.periodBox, periodTextFor(v), { instant: true });
@@ -2885,6 +3279,12 @@ function renderAll(s) {
   applyPalette('B', s.teams.B.color, { instant: true });
   applyBoardVars(s);
   clearRowExpands();
+  /* 回放（首繪／重連 — 一律瞬時落位） */
+  rpActive = !!(s.replay && s.replay.active);
+  rpPrevTs = 0;
+  rpHeadReady = false;
+  boardEl.classList.toggle('replaying', rpActive);
+  applyScoresHidden(rpActive && s.replay.showScores === false, { instant: true, force: true });
   tierShown = effTier();
   mainMode = tierShown === 'small' ? 'small' : 'large';
   applyRowModes();            // per-row classes + grid tracks + width cap
@@ -2898,6 +3298,8 @@ function renderAll(s) {
   renderAllView(fullV, s);
   renderIcons(s.banners, { instant: true });
   renderInfoBanner(s.infoBanner, { instant: true });
+  if (rpActive) applyReconstruction({ instant: true });   // 蓋過現場值：比分／圖標／橫幅全走重建
+  arcSetVisible(wantArc(), { instant: true });
   updateRosters({ instant: true });
   updateBottomBanner({ instant: true });
   updateCornerLogos({ instant: true });
@@ -2911,6 +3313,12 @@ function onSync(msg) {
   }
   const p = st;
   st = s;
+  /* 回放日誌模型（帶清單的那次廣播才重建；key 未變的高頻 seek 廣播不帶） */
+  const logRebuilt = msg.replayLog !== undefined;
+  if (logRebuilt) {
+    rpModel = buildReplayModel(msg.replayLog);
+    arcMarksRebuild();
+  }
   if (firstPaint) {
     renderAll(s);
     firstPaint = false;
@@ -2922,6 +3330,18 @@ function onSync(msg) {
     if (p.teams[t].color !== s.teams[t].color) applyPalette(t, s.teams[t].color, {});
   }
   applyBoardVars(s);
+
+  /* 回放進出場／回放中的設定切換（在 applyTier 之前 — effTier 已讀新狀態） */
+  {
+    const pRp = p.replay || {}, sRp = s.replay || {};
+    if (!!sRp.active !== rpActive) {
+      rpActive ? exitReplayFx({}) : enterReplayFx({});
+    } else if (rpActive) {
+      if (!!sRp.showScores !== !!pRp.showScores) applyScoresHidden(sRp.showScores === false, {});
+      if (sRp.tier !== pRp.tier || !!sRp.showScores !== !!pRp.showScores) arcSetVisible(wantArc(), {});
+      if (logRebuilt) applyReconstruction({});   // 日誌被編輯 — 依新模型重推
+    }
+  }
 
   /* per-tier full-name / short-name switch */
   {
@@ -2954,8 +3374,8 @@ function onSync(msg) {
   if (p.event.visible !== s.event.visible) {
     for (const v of views) toggleCell(v.cellEvent, s.event.visible, 'y', { instant: !v.visible });
   }
-  if (p.period.visible !== s.period.visible) {
-    for (const v of views) toggleCell(v.boxPeriod, s.period.visible, 'x', { instant: !v.visible || !clk });
+  if (periodShownFor(p) !== periodShownFor(s)) {
+    for (const v of views) toggleCell(v.boxPeriod, periodShownFor(s), 'x', { instant: !v.visible || !clk });
   }
 
   /* texts */
@@ -2982,21 +3402,24 @@ function onSync(msg) {
     }
   }
 
-  /* scores (quiet corrections; goals handled via fx) — glide the board width if it changes */
-  glideWidthAround(() => {
-    for (const t of ['A', 'B']) {
-      if (p.teams[t].score === s.teams[t].score) continue;
-      if (fx && fx.kind === 'goal' && fx.team === t) continue;
-      const dir = s.teams[t].score > p.teams[t].score ? 1 : -1;
-      for (const v of views) v.scoreTapes[t].set(String(s.teams[t].score), { dir, anim: v.visible, pop: false });
-    }
-  });
+  /* scores (quiet corrections; goals handled via fx) — glide the board width if it changes.
+   * 回放中比分／圖標／橫幅全由重建層驅動（applyReconstruction）— 現場同步跳過 */
+  if (!rpActive) {
+    glideWidthAround(() => {
+      for (const t of ['A', 'B']) {
+        if (p.teams[t].score === s.teams[t].score) continue;
+        if (fx && fx.kind === 'goal' && fx.team === t) continue;
+        const dir = s.teams[t].score > p.teams[t].score ? 1 : -1;
+        for (const v of views) v.scoreTapes[t].set(String(s.teams[t].score), { dir, anim: v.visible, pop: false });
+      }
+    });
 
-  /* event icons */
-  renderIcons(s.banners);
+    /* event icons */
+    renderIcons(s.banners);
 
-  /* info banner */
-  renderInfoBanner(s.infoBanner);
+    /* info banner */
+    renderInfoBanner(s.infoBanner);
+  }
 
   /* roster side panels (tier gating + paging + live edits) */
   updateRosters();
@@ -3012,6 +3435,8 @@ function frame(now) {
   requestAnimationFrame(frame);
   stepParticles(now);
   if (!st) return;
+
+  if (rpActive && st.replay) replayFrame(now);   // 回放：跨點偵測＋圓弧滾動
 
   const rem = timerRemaining(st.timer);
   const dir = st.timer.direction === 'up' ? 'up' : 'down';

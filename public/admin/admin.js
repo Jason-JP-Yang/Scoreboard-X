@@ -2,6 +2,7 @@
  * re-renders from SSE state, so several admins (PC + phone) stay in sync. */
 import { connect, act, serverNow } from '/shared/net.js';
 import { buildPalette, relLuminance } from '/shared/palette.js';
+import { buildReplayModel, replayHead, markLabel } from '/shared/replay.js';
 
 const $ = id => document.getElementById(id);
 let st = null;
@@ -391,6 +392,7 @@ function refresh(s) {
   renderCornerGrid();
   renderFlagPickers();
   hkSyncFromState(s);   // keyboard shortcuts now live in server state
+  refreshReplay(s);     // 回放分頁（狀態徽章／時間軸／事件清單）
   syncToggleSegs();   // every 開關 above wrote its hidden checkbox — paint the segs
   if (sliderRowsDirty) { sliderRowsDirty = false; syncSegWidths(); }
 }
@@ -2666,6 +2668,207 @@ window.addEventListener('keydown', e => {
 });
 renderHotkeys();
 
+/* ------------------------------------------------------------ 回放 */
+/* 回放分頁：伺服器擁有播放頭；這裡只發 replay.* 動作並把時間軸畫出來。
+ * 拖動夾在相鄰事件點之間（本地夾制＝樂觀 UI，伺服器仍會再夾一次）；
+ * 跨越事件點只能用跳轉按鈕（事件前 10 秒）／開頭結尾／播放。 */
+
+let rpModel = buildReplayModel([]);
+let rpTrackKey = '';
+let rpEventsKey = '';
+let rpDrag = null;        // { lo, hi, head } — 拖動中（lo/hi = 本段邊界）
+let rpTabShown = false;
+let rpPreviewMade = false;
+
+/* 事件的比賽時鐘（entry.clock = remainingMs；正計時反轉）＋節次 */
+function fmtEntryClock(mk, s) {
+  let v = Math.max(0, Number(mk.clock) || 0);
+  if (s.timer.direction === 'up') v = Math.max(0, (s.timer.durationMs || 0) - v);
+  const sec = Math.floor(v / 1000);
+  return (mk.period ? mk.period + ' · ' : '') + `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+const rpInk = c => (relLuminance(c) > 0.42 ? '#0D0F13' : '#fff');
+
+function renderRpTrack(s) {
+  const host = $('rpTrackMarks');
+  const key = rpModel.marks.map(mk => mk.id).join(',') + '|' + rpModel.t0 + '|' + rpModel.t1
+    + '|' + s.teams.A.color + s.teams.B.color;
+  if (key === rpTrackKey) return;
+  rpTrackKey = key;
+  host.innerHTML = '';
+  if (rpModel.empty) return;
+  const span = Math.max(1, rpModel.t1 - rpModel.t0);
+  for (const mk of rpModel.marks) {
+    const el = document.createElement('span');
+    el.className = 'rp-tm';
+    el.dataset.utc = mk.utc;
+    el.style.left = ((mk.utc - rpModel.t0) / span * 100).toFixed(3) + '%';
+    const lb = markLabel(mk, s.teams);
+    el.title = `${lb.head === '!' ? '' : lb.head + ' '}${lb.text} · 點擊跳到事件前 10 秒`;
+    if (mk.kind === 'goal') {
+      el.style.setProperty('--mk-bg', s.teams[mk.team].color);
+      el.style.setProperty('--mk-ink', rpInk(s.teams[mk.team].color));
+    } else {
+      el.style.setProperty('--mk-bg', mk.tone);
+      el.style.setProperty('--mk-ink', mk.fg);
+      el.textContent = '!';
+    }
+    el.addEventListener('click', ev => {
+      ev.stopPropagation();
+      if (st && st.replay && st.replay.active) act('replay.jump', { entryId: mk.id });
+    });
+    host.append(el);
+  }
+}
+
+function renderRpEvents(s) {
+  const host = $('rpEvents');
+  const key = rpModel.marks.map(mk => mk.id).join(',')
+    + '|' + (s.teams.A.short || '') + (s.teams.B.short || '') + s.timer.direction;
+  if (key === rpEventsKey) return;
+  rpEventsKey = key;
+  host.innerHTML = '';
+  for (const mk of rpModel.marks) {
+    const row = document.createElement('div');
+    row.className = 'rp-ev';
+    row.dataset.utc = mk.utc;
+    const clock = document.createElement('span');
+    clock.className = 'rp-ev-clock';
+    clock.textContent = fmtEntryClock(mk, s);
+    const chip = document.createElement('span');
+    chip.className = 'rp-ev-chip';
+    const lb = markLabel(mk, s.teams);
+    chip.textContent = lb.head;
+    if (mk.kind === 'goal') {
+      chip.style.setProperty('--mk-bg', s.teams[mk.team].color);
+      chip.style.setProperty('--mk-ink', rpInk(s.teams[mk.team].color));
+    } else {
+      chip.style.setProperty('--mk-bg', mk.tone);
+      chip.style.setProperty('--mk-ink', mk.fg);
+    }
+    const text = document.createElement('span');
+    text.className = 'rp-ev-text';
+    text.textContent = lb.text;
+    const jump = document.createElement('button');
+    jump.className = 'btn sm';
+    jump.textContent = '▶ 前10秒';
+    jump.title = '跳到此事件前 10 秒並繼續播放';
+    jump.addEventListener('click', () => {
+      if (st && st.replay && st.replay.active) act('replay.jump', { entryId: mk.id });
+    });
+    row.append(clock, chip, text, jump);
+    host.append(row);
+  }
+}
+
+function refreshReplay(s) {
+  const r = s.replay || {};
+  const on = !!r.active;
+  $('tabBtnReplay').classList.toggle('rec', on);
+  const tog = $('rpToggleBtn');
+  tog.textContent = on ? '結束回放' : '進入回放';
+  tog.classList.toggle('primary', !on);
+  tog.classList.toggle('warn', on);
+  const stat = $('rpStatus');
+  stat.textContent = on ? (r.playing ? '回放中 · 播放' : '回放中 · 暫停') : '未啟動';
+  stat.classList.toggle('on', on);
+  document.querySelectorAll('#rpTierSeg .seg-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.tier === (r.tier || 'large')));
+  $('rpScores').checked = r.showScores !== false;
+  const play = $('rpPlayBtn');
+  play.textContent = r.playing ? '⏸ 暫停' : '▶ 播放';
+  play.classList.toggle('playing', !!r.playing);
+  $('rpTrack').classList.toggle('disabled', !on || rpModel.empty);
+  renderRpTrack(s);
+  renderRpEvents(s);
+  document.querySelectorAll('.rp-transport .btn, #rpEvents .btn').forEach(b => { b.disabled = !on; });
+}
+
+/* ---- 控制 ---- */
+$('rpToggleBtn').addEventListener('click', () => {
+  if (!st) return;
+  if (st.replay && st.replay.active) {
+    if (confirm('結束回放並還原現場畫面？')) act('replay.stop');
+  } else {
+    act('replay.start');
+  }
+});
+document.querySelectorAll('#rpTierSeg .seg-btn').forEach(b =>
+  b.addEventListener('click', () => act('replay.tier', { tier: b.dataset.tier })));
+$('rpScores').addEventListener('change', e => act('replay.scores', { show: e.target.checked }));
+$('rpPlayBtn').addEventListener('click', async () => {
+  if (!st || !st.replay) return;
+  const res = await act(st.replay.playing ? 'replay.pause' : 'replay.play');
+  if (res && res.ok === false && res.error) alert(res.error);
+});
+document.querySelectorAll('[data-rpnudge]').forEach(b =>
+  b.addEventListener('click', () => {
+    if (!st || !st.replay || !st.replay.active) return;
+    act('replay.seek', { utc: replayHead(st.replay, serverNow()) + Number(b.dataset.rpnudge) });
+  }));
+$('rpToStart').addEventListener('click', () => {
+  if (!rpModel.empty) act('replay.seek', { utc: rpModel.t0, free: true });
+});
+$('rpToEnd').addEventListener('click', () => {
+  if (!rpModel.empty) act('replay.seek', { utc: rpModel.t1, free: true });
+});
+
+/* ---- 時間軸拖動（不可穿過事件點）---- */
+{
+  const track = $('rpTrack');
+  const utcAtX = ev => {
+    const r = track.getBoundingClientRect();
+    const f = clamp((ev.clientX - r.left) / Math.max(1, r.width), 0, 1);
+    return rpModel.t0 + f * (rpModel.t1 - rpModel.t0);
+  };
+  const sendSeek = throttle(utc => act('replay.seek', { utc }), 90);
+  track.addEventListener('pointerdown', ev => {
+    if (!st || !st.replay || !st.replay.active || rpModel.empty) return;
+    if (ev.target.closest('.rp-tm')) return;   // 事件點本身是跳轉按鈕
+    track.setPointerCapture(ev.pointerId);
+    const h0 = replayHead(st.replay, serverNow());
+    let lo = rpModel.t0, hi = rpModel.t1;      // 本段邊界（與 server 夾制同規則）
+    for (const mk of rpModel.marks) {
+      if (mk.utc < h0) { if (mk.utc + 1 > lo) lo = mk.utc + 1; }
+      else { if (mk.utc < hi) hi = mk.utc; break; }
+    }
+    if (lo > hi) lo = hi;
+    rpDrag = { lo, hi, head: Math.min(hi, Math.max(lo, utcAtX(ev))) };
+    const span = Math.max(1, rpModel.t1 - rpModel.t0);
+    track.style.setProperty('--seg-lo', ((lo - rpModel.t0) / span * 100).toFixed(2) + '%');
+    track.style.setProperty('--seg-hi', ((hi - rpModel.t0) / span * 100).toFixed(2) + '%');
+    track.classList.add('dragging');
+    sendSeek(rpDrag.head);
+  });
+  track.addEventListener('pointermove', ev => {
+    if (!rpDrag) return;
+    rpDrag.head = Math.min(rpDrag.hi, Math.max(rpDrag.lo, utcAtX(ev)));
+    sendSeek(rpDrag.head);
+  });
+  const endDrag = () => {
+    if (!rpDrag) return;
+    act('replay.seek', { utc: rpDrag.head });  // 收尾以最終位置為準
+    rpDrag = null;
+    track.classList.remove('dragging');
+  };
+  track.addEventListener('pointerup', endDrag);
+  track.addEventListener('pointercancel', endDrag);
+}
+
+/* ---- 預覽（本分頁首次開啟才載入 iframe，與 OBS 同源 /overlay）---- */
+function rpEnsurePreview() {
+  if (rpPreviewMade) return;
+  rpPreviewMade = true;
+  const ifr = document.createElement('iframe');
+  ifr.className = 'pv-layer';
+  ifr.src = '/overlay';
+  ifr.setAttribute('scrolling', 'no');
+  $('rpPreviewFrame').append(ifr);
+}
+const rpFrame = $('rpPreviewFrame');
+function rpFitPreview() { if (rpFrame) rpFrame.style.setProperty('--pv-scale', rpFrame.clientWidth / 1920); }
+if (rpFrame) { new ResizeObserver(rpFitPreview).observe(rpFrame); rpFitPreview(); }
+
 /* ------------------------------------------------------------ tabs */
 
 const TAB_KEY = 'sbx.tab';
@@ -2676,6 +2879,8 @@ function setTab(name) {
   try { localStorage.setItem(TAB_KEY, name); } catch {}
   fitPreview();   // the frame only has real dimensions while its tab shows
   syncSegWidths();   // ditto — a hidden tab's cards measure 0 width
+  rpTabShown = name === 'replay';
+  if (rpTabShown) { rpEnsurePreview(); rpFitPreview(); }
 }
 document.querySelectorAll('#tabbar .tab-btn').forEach(b => {
   b.addEventListener('click', () => setTab(b.dataset.tab));
@@ -2719,6 +2924,27 @@ function loop() {
     const t = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
     if (n.textContent !== t) n.textContent = t;
   });
+  /* 回放時間軸：滑塊／進度／讀數／事件列 done-next 著色（僅在回放分頁時更新） */
+  if (rpTabShown && st.replay && st.replay.active && !rpModel.empty) {
+    const span = Math.max(1, rpModel.t1 - rpModel.t0);
+    let h = rpDrag ? rpDrag.head : replayHead(st.replay, serverNow());
+    h = Math.min(rpModel.t1, Math.max(rpModel.t0, h));
+    const pct = ((h - rpModel.t0) / span * 100).toFixed(3) + '%';
+    $('rpThumb').style.left = pct;
+    $('rpTrackDone').style.width = pct;
+    const info = `${fmtMs(h - rpModel.t0)} / ${fmtMs(span)}`;
+    if ($('rpTimeInfo').textContent !== info) $('rpTimeInfo').textContent = info;
+    let nextSeen = false;
+    document.querySelectorAll('#rpEvents .rp-ev').forEach(row => {
+      const done = +row.dataset.utc < h;
+      row.classList.toggle('done', done);
+      const isNext = !done && !nextSeen;
+      if (isNext) nextSeen = true;
+      row.classList.toggle('next', isNext);
+    });
+    document.querySelectorAll('#rpTrackMarks .rp-tm').forEach(mEl =>
+      mEl.classList.toggle('future', +mEl.dataset.utc >= h));
+  }
 }
 requestAnimationFrame(loop);
 
@@ -2739,6 +2965,12 @@ connect({
     activeMatchId = msg.activeMatchId || null;
     assetsList = msg.assets || { banner: [], corner: [], flag: [] };
     bbSeqRunInfo = msg.bbSeqRun || null;
+    /* 回放日誌（帶清單的那次廣播才重建；key 未變的高頻 seek 廣播不帶） */
+    if (msg.replayLog !== undefined) {
+      rpModel = buildReplayModel(msg.replayLog);
+      rpTrackKey = '';
+      rpEventsKey = '';
+    }
     refresh(msg.state);
     renderMatches();
   },

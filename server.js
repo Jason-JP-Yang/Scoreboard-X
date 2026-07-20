@@ -115,6 +115,18 @@ const DEFAULT_STATE = {
    * client-defined action id -> key combo string (e.g. "Shift+KeyA"). Replaced
    * wholesale via the hotkeys.set action; the admin owns the id namespace. */
   hotkeys: {},
+  /* 回放（REPLAY）— 顯示層 runtime 狀態，不屬於對局快照。播放頭是 UTC 軸上的
+   * 「假時間」，完全由操作者控制；比賽計時器不受回放影響（人手控制照舊）。
+   * tier 僅 off | small | large（全畫幅在回放中不可用）；showScores 關閉時
+   * 計分板收起兩隊列，只剩賽事名稱＋時間。重啟後保持進入狀態但強制暫停。 */
+  replay: {
+    active: false,
+    tier: 'large',            // off | small | large
+    showScores: true,
+    playing: false,
+    headUtc: 0,               // playhead：playing 時為 refEpoch 當下的值，暫停時為絕對值
+    refEpoch: 0,
+  },
 };
 
 const BANNER_TYPES = ['FOUL', 'TIMEOUT', 'SUSP2', 'YELLOW', 'RED', 'BLUE', 'MEDICAL'];
@@ -220,6 +232,8 @@ function loadState() {
         .filter(isObj).map(e => cleanRosterEntry(e, roles)).filter(e => !isBlankEntry(e));
     }
     if (!isObj(base.rosterDisplay)) base.rosterDisplay = clone(DEFAULT_STATE.rosterDisplay);
+    /* 回放：重啟後 refEpoch 已過期 — 保持進入狀態，但強制暫停在原播放頭 */
+    if (isObj(base.replay)) { base.replay.playing = false; base.replay.refEpoch = 0; }
   } catch { /* first run or corrupt file -> defaults */ }
   return base;
 }
@@ -413,6 +427,18 @@ function sanitize() {
       out[String(k).slice(0, 40)] = v.slice(0, 40);
     }
     state.hotkeys = out;
+  }
+  /* 回放狀態 — enum / boolean / number 全面驗證（patch 不可直達，僅 replay.* 動作） */
+  {
+    const r = isObj(state.replay) ? state.replay : {};
+    state.replay = {
+      active: !!r.active,
+      tier: ['off', 'small', 'large'].includes(r.tier) ? r.tier : 'large',
+      showScores: r.showScores !== false,
+      playing: !!r.playing,
+      headUtc: Number.isFinite(Number(r.headUtc)) ? Math.max(0, Number(r.headUtc)) : 0,
+      refEpoch: Number.isFinite(Number(r.refEpoch)) ? Math.max(0, Number(r.refEpoch)) : 0,
+    };
   }
 }
 
@@ -1013,6 +1039,7 @@ function scheduleAutomation() {
   scheduleRosterFlip();
   scheduleBbSeq();
   scheduleLast30();
+  scheduleReplayEnd();
 }
 
 /* ---------------------------------------------------------- match library */
@@ -1246,6 +1273,9 @@ function persistMatches() {
 
 const matchStore = loadMatches();
 
+/* 任何對局日誌變動都遞增（append／編輯／匯入）— 回放日誌快取與廣播去重的鍵 */
+let logRev = 0;
+
 function findMatch(id) {
   return matchStore.matches.find(m => m.id === String(id)) || null;
 }
@@ -1269,6 +1299,7 @@ function logEvent(type, data) {
     data: sanitizeData(data),
   });
   if (m.log.length > MAX_LOG) m.log.splice(0, m.log.length - MAX_LOG);
+  logRev++;
 }
 
 /* mirror the current match-scoped state into the active match record */
@@ -1356,6 +1387,97 @@ function matchSummaries() {
     durationMs: m.snap.timer.durationMs,
     teams: { A: pick(m.snap.teams.A), B: pick(m.snap.teams.B) },
   }));
+}
+
+/* ------------------------------------------------------------- replay */
+/* 回放引擎（伺服器側只管播放頭與夾制；畫面倒推在 client 用 /shared/replay.js
+ * 以同一份日誌重建 — 兩邊的篩選規則必須一致，改動時同步修改）：
+ *   · RELEVANT（重建＋時間軸範圍）= SCORE / ICON / INFO / RESET
+ *   · MARKER（時間軸標註＝拖動屏障）= 進球（SCORE kind:goal）＋橫幅顯示（INFO op:show）
+ *   · 事件在 head > utc 時才算已發生（嚴格大於）：停在事件點上畫面仍是事件前，
+ *     按下播放的瞬間立即套用（時間軸以 1x 平滑滑過標記 — Jason: 一秒內穿過）。
+ *   · 拖動／微調夾在 (上一事件點, 下一事件點] — 段內狀態恆定，拖動絕不閃分；
+ *     跨越事件點只能靠跳轉按鈕（明確意圖）或播放。
+ * 回放動作一律不寫入對局日誌。 */
+const REPLAY_PAD_MS = 12000;   // 時間軸頭尾留白
+const REPLAY_RELEVANT = new Set(['SCORE', 'ICON', 'INFO', 'RESET']);
+const REPLAY_LOG_TYPES = new Set(['SCORE', 'ICON', 'INFO', 'RESET', 'PHASE']);  // 快照額外帶 PHASE 供 admin 對時
+
+/* 事件點 utc 清單（日誌本身依 utc 排序，這裡直接沿用） */
+function replayMarks() {
+  const m = activeMatch();
+  if (!m) return [];
+  const out = [];
+  for (const e of m.log) {
+    if (e.type === 'SCORE' && e.data && e.data.kind === 'goal') out.push(e.utc);
+    else if (e.type === 'INFO' && e.data && e.data.op === 'show') out.push(e.utc);
+  }
+  return out;
+}
+function replayRange() {
+  const m = activeMatch();
+  const rel = m ? m.log.filter(e => REPLAY_RELEVANT.has(e.type)) : [];
+  if (!rel.length) { const now = Date.now(); return { t0: now, t1: now }; }
+  return { t0: rel[0].utc - REPLAY_PAD_MS, t1: rel[rel.length - 1].utc + REPLAY_PAD_MS };
+}
+function replayHeadNow() {
+  const r = state.replay;
+  return r.playing ? r.headUtc + (Date.now() - r.refEpoch) : r.headUtc;
+}
+/* 拖動夾制：head 所在段 = (上一事件點+1ms, 下一事件點]，再夾進 [t0, t1] */
+function replayClampSeek(target, h0) {
+  const { t0, t1 } = replayRange();
+  let lo = t0, hi = t1;
+  for (const u of replayMarks()) {
+    if (u < h0) { if (u + 1 > lo) lo = u + 1; }
+    else { if (u < hi) hi = u; break; }
+  }
+  return clamp(target, Math.min(lo, hi), hi);
+}
+
+/* 播放到時間軸終點自動暫停（重建狀態已到終局，再走毫無意義） */
+let replayEndTimer = null;
+function scheduleReplayEnd() {
+  clearTimeout(replayEndTimer);
+  replayEndTimer = null;
+  const r = state.replay;
+  if (!r.active || !r.playing) return;
+  const wait = replayRange().t1 - replayHeadNow();
+  replayEndTimer = setTimeout(() => {
+    const r2 = state.replay;
+    if (!r2.active || !r2.playing) return;
+    const end = replayRange().t1;
+    if (replayHeadNow() < end - 40) { scheduleReplayEnd(); return; }   // 日誌變長了 — 重排
+    r2.headUtc = end;
+    r2.refEpoch = 0;
+    r2.playing = false;
+    afterAutoChange();
+  }, Math.max(0, wait) + 30);
+}
+
+/* 換局／新局／重置：回放語境（該局日誌）已失效 — 直接退出回放 */
+function stopReplay() {
+  state.replay.active = false;
+  state.replay.playing = false;
+  state.replay.refEpoch = 0;
+}
+
+/* 回放日誌快照（client 重建畫面用）：型別篩選＋欄位裁剪，依 logRev 快取；
+ * 廣播時只在鍵改變的那一次帶上清單（拖動 seek 的高頻廣播保持輕量） */
+let replayLogCache = { key: '', list: null };
+function replayLogPayload() {
+  if (!state.replay.active) return null;
+  const m = activeMatch();
+  if (!m) return null;
+  const key = m.id + ':' + m.log.length + ':' + logRev;
+  if (replayLogCache.key !== key) {
+    replayLogCache = {
+      key,
+      list: m.log.filter(e => REPLAY_LOG_TYPES.has(e.type))
+        .map(e => ({ id: e.id, utc: e.utc, clock: e.clock, period: e.period, type: e.type, data: e.data })),
+    };
+  }
+  return replayLogCache;
 }
 
 /* boot: no library yet -> wrap the current live board into match #1 */
@@ -1528,6 +1650,7 @@ function applyAction(action) {
         delete action.patch.rosterDisplay; // ... same
         delete action.patch.bbSeq;         // sequence only via bbseq.save
         delete action.patch.hotkeys;       // shortcuts only via hotkeys.set (deepMerge can't delete keys)
+        delete action.patch.replay;        // replay only via replay.* actions (夾制邏輯不可繞過)
         // (orgBanners / cornerLogos ARE patchable — plain display config like board.*)
         if (isObj(action.patch.board) && 'tier' in action.patch.board) {
           autoTierPrev = null;             // operator re-picked the view — automation
@@ -1752,6 +1875,7 @@ function applyAction(action) {
       syncMatchSnap();               // seal the outgoing match first
       freshMatchState();
       resetAutoRuntime();            // pending automation steps belong to the old match
+      stopReplay();                  // 回放語境（舊局日誌）已失效
       const m = newMatchRecord(matchSnap());
       matchStore.matches.push(m);
       matchStore.activeId = m.id;
@@ -1765,6 +1889,7 @@ function applyAction(action) {
         matchStore.activeId = m.id;
         applySnap(m);
         resetAutoRuntime();          // pending automation steps belong to the old match
+        stopReplay();                // 回放語境（舊局日誌）已失效
       }
       break;
     }
@@ -1799,6 +1924,7 @@ function applyAction(action) {
         added++;
       }
       if (!added) return { ok: false, error: '檔案中沒有有效的對局' };
+      logRev++;
       persistMatches();
       break;
     }
@@ -1826,6 +1952,7 @@ function applyAction(action) {
       if (!e) return { ok: false, error: 'entry not found' };
       Object.assign(e, cleanEntryPatch(isObj(action.entry) ? action.entry : {}));
       sortLog(m);
+      logRev++;
       m.updatedAt = Date.now();
       persistMatches();
       break;
@@ -1836,6 +1963,7 @@ function applyAction(action) {
       if (m.log.length >= MAX_LOG) return { ok: false, error: 'log full' };
       m.log.push(normalizeEntry(action.entry));
       sortLog(m);
+      logRev++;
       m.updatedAt = Date.now();
       persistMatches();
       break;
@@ -1844,6 +1972,7 @@ function applyAction(action) {
       const m = findMatch(action.id);
       if (!m) return { ok: false, error: 'match not found' };
       m.log = m.log.filter(x => x.id !== String(action.entryId));
+      logRev++;
       m.updatedAt = Date.now();
       persistMatches();
       break;
@@ -1852,8 +1981,86 @@ function applyAction(action) {
       const m = findMatch(action.id);
       if (!m) return { ok: false, error: 'match not found' };
       m.log = [];
+      logRev++;
       m.updatedAt = Date.now();
       persistMatches();
+      break;
+    }
+    /* ------------------------------------------------------------ replay */
+    case 'replay.start': {
+      const r = state.replay;
+      if (!r.active) {
+        r.active = true;
+        r.playing = false;
+        r.refEpoch = 0;
+        r.headUtc = replayRange().t1;    // 從「終局＝現在」進入：畫面無跳變，再由操作者回跳
+        r.tier = ['off', 'small', 'large'].includes(state.board.tier) ? state.board.tier : 'large';
+      }
+      break;
+    }
+    case 'replay.stop': {
+      stopReplay();
+      break;
+    }
+    case 'replay.tier': {
+      if (['off', 'small', 'large'].includes(action.tier)) state.replay.tier = action.tier;
+      break;
+    }
+    case 'replay.scores': {
+      state.replay.showScores = !!action.show;
+      break;
+    }
+    case 'replay.play': {
+      const r = state.replay;
+      if (!r.active || r.playing) break;
+      const { t1 } = replayRange();
+      let h = r.headUtc;
+      if (h >= t1) return { ok: false, error: '已到時間軸結尾，請先跳回較早的時刻' };
+      /* 停在事件點上（拖動的停點）：按下繼續＝立刻套用該事件（head 跨過 utc），
+       * 時間軸隨後以 1x 平滑滑過標記 */
+      for (const u of replayMarks()) {
+        if (u < h) continue;
+        if (u - h <= 80) h = u + 1;
+        break;
+      }
+      r.headUtc = h;
+      r.refEpoch = Date.now();
+      r.playing = true;
+      break;
+    }
+    case 'replay.pause': {
+      const r = state.replay;
+      if (r.playing) {
+        r.headUtc = replayHeadNow();
+        r.playing = false;
+        r.refEpoch = 0;
+      }
+      break;
+    }
+    case 'replay.seek': {
+      const r = state.replay;
+      if (!r.active) break;
+      const t = Number(action.utc);
+      if (!Number.isFinite(t)) break;
+      const { t0, t1 } = replayRange();
+      /* free = 明確跳轉（回到開頭／結尾按鈕）— 只夾範圍；拖動／微調走事件點夾制 */
+      r.headUtc = action.free ? clamp(t, t0, t1) : replayClampSeek(t, replayHeadNow());
+      r.refEpoch = Date.now();   // 播放中重定錨；暫停時 refEpoch 不參與
+      break;
+    }
+    case 'replay.jump': {
+      const r = state.replay;
+      if (!r.active) break;
+      const m = activeMatch();
+      const e = m && m.log.find(x => x.id === String(action.entryId));
+      if (!e) return { ok: false, error: 'entry not found' };
+      const { t0 } = replayRange();
+      let lo = t0;
+      for (const u of replayMarks()) { if (u < e.utc) lo = u + 1; else break; }
+      /* 回到該事件前 10 秒（不足 10 秒則貼在上一事件點之後）並繼續播放 */
+      r.headUtc = clamp(e.utc - 10000, Math.min(lo, e.utc), e.utc);
+      r.refEpoch = Date.now();
+      r.playing = true;
       break;
     }
     /* -------------------------------------------------------------- resets */
@@ -1874,6 +2081,7 @@ function applyAction(action) {
       state.timer.endAlternate = DEFAULT_STATE.timer.endAlternate;
       if (state.board.tier === 'full') state.board.tier = 'large';
       resetAutoRuntime();
+      stopReplay();               // 重置＝回放語境失效
       scheduleTimerEnd();
       break;
     }
@@ -1938,8 +2146,11 @@ function listAssets() {
 
 const sseClients = new Set();
 
-function snapshot(fx) {
-  return {
+/* logDiff=true（廣播）：replayLog 只在鍵改變的那一次帶清單 — client 依鍵快取，
+ * 初始快照（SSE 首包／/api/state）永遠帶全量 */
+let replayLogBcastKey = '';
+function snapshot(fx, { logDiff = false } = {}) {
+  const out = {
     state,
     serverNow: Date.now(),
     fx: fx || null,
@@ -1948,9 +2159,17 @@ function snapshot(fx) {
     assets: listAssets(),
     bbSeqRun: bbSeqRun ? { idx: bbSeqRun.idx } : null,   // runtime playback status
   };
+  const rl = replayLogPayload();
+  if (rl) {
+    out.replayLogKey = rl.key;
+    if (!logDiff || rl.key !== replayLogBcastKey) out.replayLog = rl.list;
+  }
+  return out;
 }
 function broadcast(fx) {
-  const msg = `data: ${JSON.stringify(snapshot(fx))}\n\n`;
+  const msg = `data: ${JSON.stringify(snapshot(fx, { logDiff: true }))}\n\n`;
+  const rl = replayLogPayload();
+  replayLogBcastKey = rl ? rl.key : '';
   for (const res of sseClients) res.write(msg);
 }
 setInterval(() => { for (const res of sseClients) res.write(': ping\n\n'); }, 25000).unref();

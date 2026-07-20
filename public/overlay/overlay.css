@@ -840,3 +840,157 @@ body.bg-dark { background: #17191E; }
   transition: background 0.25s ease, transform 0.25s ease;
 }
 .rp-dots i.on { background: var(--rp-c, #D6152C); transform: scale(1.3); }
+
+/* ============================================================ replay */
+/* REPLAY 模式：計時器區塊換上 REPLAY 樣式 — 節次膠囊變琥珀 REPLAY 徽章、
+ * 時間數字染琥珀（一眼看出非現場畫面）。隱藏比分時（.no-scores）兩隊列
+ * 收合、事件圖標軌隱藏，只剩賽事名稱＋時間。 */
+
+#board.replaying .period-pill {
+  background: #FF8A00;
+  border-color: rgba(255, 255, 255, 0.30);
+  animation: raPulse 2.4s ease-in-out infinite;
+}
+#board.replaying .period-text {
+  color: #15181E;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+@keyframes raPulse {
+  0%, 100% { filter: brightness(1); }
+  50%      { filter: brightness(1.16); }
+}
+#board.replaying .clock-tapes { color: var(--urgent); }
+#board.replaying .clock-word  { color: var(--urgent); }
+
+#board.no-scores .icon-rail { visibility: hidden; }
+#board.no-scores-anim .team { overflow: hidden; }   /* 收合／展開期間裁掉溢出的隊列內容 */
+
+/* --------------------------------------------------- 圓弧時間軸 */
+/* 幾何（針尖 960/966、半徑 2600）與 overlay.js 的 ARC_* 常數一致。
+ * 針尖固定弧頂：左（已過）琥珀、右（未來）灰白；標記沿弧滑過，
+ * 兩側由遮罩淡出。 */
+#replayarc {
+  position: absolute; inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  -webkit-mask-image: linear-gradient(90deg, transparent 9%, #000 24%, #000 76%, transparent 91%);
+          mask-image: linear-gradient(90deg, transparent 9%, #000 24%, #000 76%, transparent 91%);
+  transition: opacity 0.45s cubic-bezier(0.3, 0.9, 0.45, 1),
+              transform 0.45s cubic-bezier(0.3, 0.9, 0.45, 1),
+              visibility 0s linear 0s;
+}
+#replayarc.ra-hidden {
+  opacity: 0;
+  transform: translateY(30px);
+  visibility: hidden;
+  transition: opacity 0.45s cubic-bezier(0.3, 0.9, 0.45, 1),
+              transform 0.45s cubic-bezier(0.3, 0.9, 0.45, 1),
+              visibility 0s linear 0.45s;   /* 淡出跑完才真正隱藏 */
+}
+#replayarc.ra-snap { transition: none !important; }
+#replayarc.ra-snap * { animation: none !important; transition: none !important; }
+
+.ra-svg { position: absolute; inset: 0; }
+.ra-under {
+  fill: none;
+  stroke: rgba(13, 15, 19, 0.55);
+  stroke-width: 10;
+  stroke-linecap: round;
+}
+.ra-line { fill: none; stroke-linecap: round; }
+.ra-past {
+  stroke: rgba(255, 176, 32, 0.92);
+  stroke-width: 3.5;
+  filter: drop-shadow(0 0 6px rgba(255, 176, 32, 0.45));
+}
+.ra-future { stroke: rgba(242, 244, 248, 0.42); stroke-width: 3; }
+.ra-ticks line { stroke: rgba(242, 244, 248, 0.85); stroke-width: 2; }
+
+/* 進場：弧線從中心向兩端描出，標記交錯浮現（.ra-in 由 JS 掛 1.4s 後移除，
+ * 之後標記進出視窗只靠邊緣遮罩＋透明度，不再重播動畫） */
+#replayarc.ra-in .ra-line {
+  stroke-dasharray: 100;
+  animation: raDraw 0.9s cubic-bezier(0.3, 0.9, 0.45, 1) both;
+}
+#replayarc.ra-in .ra-under { animation: raFadeIn 0.6s ease-out both; }
+@keyframes raDraw { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+@keyframes raFadeIn { from { opacity: 0; } }
+#replayarc.ra-in .ra-mk {
+  animation: raMkIn 0.45s cubic-bezier(0.3, 0.9, 0.45, 1) backwards;
+  animation-delay: calc(var(--mk-d, 0) * 1ms + 350ms);
+}
+@keyframes raMkIn { from { opacity: 0; } }
+#replayarc.ra-in .ra-needle { animation: raMkIn 0.5s ease-out backwards 250ms; }
+
+.ra-needle { position: absolute; left: 960px; top: 966px; width: 0; height: 0; }
+.ra-nd-line {
+  position: absolute; left: -1.5px; bottom: 12px;
+  width: 3px; height: 42px;
+  background: linear-gradient(to top, #FFFFFF, rgba(255, 255, 255, 0));
+  border-radius: 2px;
+}
+.ra-nd-dot {
+  position: absolute; left: -7px; top: -7px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  box-shadow: 0 0 14px rgba(255, 255, 255, 0.85), 0 0 30px rgba(255, 176, 32, 0.55);
+}
+.ambient .ra-nd-dot { animation: glowBreath 4.5s ease-in-out infinite; }
+
+.ra-marks { position: absolute; inset: 0; }
+.ra-mk { position: absolute; left: 0; top: 0; will-change: transform, opacity; }
+.ra-mk.expanded { z-index: 3; }
+
+.ra-dot {
+  position: absolute; left: 0; top: 0;
+  width: 38px; height: 38px;
+  transform: translate(-50%, -50%) scale(var(--mk-s, 1));
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--mk-bg, #E0132F);
+  color: var(--mk-ink, #FFFFFF);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  transition: filter 0.4s ease;
+}
+.ra-dot svg { width: 23px; height: 23px; display: block; }
+.ra-dot b {
+  font: 800 26px/1 var(--font-sport);
+  transform: translateY(-1px);
+}
+.ra-mk.future .ra-dot { filter: grayscale(0.35) brightness(0.72); }
+.ra-mk.expanded .ra-dot { border-color: #FFFFFF; }
+
+/* 展開膠囊：GOAL→「隊伍 幾比幾」；!→判罰標題。深色玻璃底、左側色章 */
+.ra-cap {
+  position: absolute; left: 0; bottom: 27px;
+  transform: translate(-50%, 12px) scale(0.85);
+  transform-origin: 50% 100%;
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 18px 8px 8px;
+  background: rgba(13, 15, 19, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 10px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.28s ease, transform 0.5s cubic-bezier(0.34, 1.45, 0.5, 1);
+}
+.ra-mk.expanded .ra-cap { opacity: 1; transform: translate(-50%, 0) scale(1); }
+.ra-cap b {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 36px; height: 36px;
+  padding: 0 10px;
+  border-radius: 7px;
+  background: var(--mk-bg, #E0132F);
+  color: var(--mk-ink, #FFFFFF);
+  font: 800 24px/1 var(--font-sport);
+  letter-spacing: 0.04em;
+}
+.ra-cap span {
+  font: 600 27px/1 var(--font-sport);
+  color: #F2F4F8;
+  letter-spacing: 0.03em;
+}

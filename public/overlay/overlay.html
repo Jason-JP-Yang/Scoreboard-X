@@ -129,6 +129,21 @@
     </div>
   </div>
 
+  <!-- REPLAY arc timeline: bottom-centre dial. Markers (goals / info banners)
+       flow along the arc beneath a fixed apex needle; the window zooms so ~4-6
+       markers stay in view. Shown only while replay is active AND scores are on.
+       Geometry (paths / positions) is computed in overlay.js. -->
+  <div id="replayarc" class="ra-hidden">
+    <svg class="ra-svg" width="1920" height="1080" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <g class="ra-ticks"></g>
+      <path class="ra-under" pathLength="100"></path>
+      <path class="ra-line ra-past" pathLength="100"></path>
+      <path class="ra-line ra-future" pathLength="100"></path>
+    </svg>
+    <div class="ra-marks"></div>
+    <div class="ra-needle"><i class="ra-nd-line"></i><i class="ra-nd-dot"></i></div>
+  </div>
+
   <canvas id="fx" width="1920" height="1080"></canvas>
 </div>
 <script type="module" src="/overlay/overlay.js"></script>

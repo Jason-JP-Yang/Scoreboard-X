@@ -755,3 +755,163 @@ select.in { background: #0E1015; }
 #pvNote { margin: 2px 0 0; }
 #pvNote:empty { display: none; }
 #pvNote.bad { color: #FCA5A5; }
+
+/* ============================================================ 回放分頁 */
+/* 佈局沿用比賽分頁：主欄＋sticky 預覽側欄；窄幕時預覽移到最前。 */
+#tab-replay.active {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
+  gap: var(--card-gap);
+  align-items: start;
+}
+.replay-main { min-width: 0; display: flex; flex-direction: column; gap: var(--card-gap); }
+.replay-side { position: sticky; top: 68px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 980px) {
+  #tab-replay.active { grid-template-columns: 1fr; }
+  .replay-side { position: static; order: -1; }
+}
+
+/* 回放進行中：分頁鈕亮紅點（任何分頁都看得到） */
+#tabBtnReplay.rec { color: var(--tx); }
+#tabBtnReplay.rec::after {
+  content: '';
+  display: inline-block;
+  width: 8px; height: 8px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: #FF8A00;
+  vertical-align: 1px;
+  animation: rpBlink 1.6s ease-in-out infinite;
+}
+@keyframes rpBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.rp-time {
+  margin-left: auto;
+  font-family: var(--num);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--tx);
+}
+.rp-transport { flex-wrap: wrap; }
+.rp-transport .btn { min-width: 56px; }
+#rpPlayBtn { min-width: 118px; }
+#rpPlayBtn.playing { background: var(--warn); border-color: var(--warn); color: #15181E; }
+
+/* ------------------------------------------------------------ 時間軸 */
+/* 全程等比例（t0..t1）。事件點＝進球（隊色圓點）／橫幅（色底 !）；拖動夾在相鄰
+ * 事件點之間 — 拖動中超出段落的區域會壓暗提示。 */
+.rp-track {
+  position: relative;
+  height: 64px;
+  margin: 6px 2px 2px;
+  touch-action: none;
+  cursor: pointer;
+  user-select: none;
+}
+.rp-track.disabled { opacity: 0.4; pointer-events: none; }
+.rp-track-line {
+  position: absolute; left: 0; right: 0; top: 50%;
+  height: 6px; transform: translateY(-50%);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.10);
+}
+.rp-track-done {
+  position: absolute; left: 0; top: 50%;
+  height: 6px; transform: translateY(-50%);
+  border-radius: 3px;
+  background: linear-gradient(90deg, rgba(255, 138, 0, 0.45), #FF8A00);
+  width: 0;
+}
+/* 拖動中：可拖範圍以外壓暗（segment 由 JS 以 --seg-lo/--seg-hi 百分比寫入） */
+.rp-track.dragging .rp-track-line {
+  background:
+    linear-gradient(90deg,
+      rgba(255, 255, 255, 0.04) 0 var(--seg-lo, 0%),
+      rgba(79, 140, 255, 0.35) var(--seg-lo, 0%) var(--seg-hi, 100%),
+      rgba(255, 255, 255, 0.04) var(--seg-hi, 100%) 100%);
+}
+.rp-track-marks { position: absolute; inset: 0; }
+.rp-tm {
+  position: absolute; top: 50%;
+  width: 18px; height: 18px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.75);
+  background: var(--mk-bg, #E0132F);
+  color: var(--mk-ink, #fff);
+  display: flex; align-items: center; justify-content: center;
+  font: 800 11px/1 var(--num);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.rp-tm:hover { transform: translate(-50%, -50%) scale(1.35); z-index: 3; }
+.rp-tm.future { filter: grayscale(0.45) brightness(0.7); }
+.rp-thumb {
+  position: absolute; top: 50%;
+  width: 4px; height: 40px;
+  transform: translate(-50%, -50%);
+  border-radius: 2px;
+  background: #FFFFFF;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.6);
+  pointer-events: none;
+}
+.rp-thumb::after {
+  content: '';
+  position: absolute; left: 50%; top: -7px;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: #FFFFFF;
+}
+
+/* ------------------------------------------------------- 事件清單 */
+.rp-events {
+  display: flex; flex-direction: column; gap: 3px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.rp-events:empty::after {
+  content: '尚無事件（進球／資訊橫幅顯示後會出現在這裡）';
+  color: var(--tx-dim);
+  font-size: 13px;
+  padding: 10px 4px;
+}
+.rp-ev {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card-2);
+}
+.rp-ev.done { opacity: 0.62; }
+.rp-ev.next { border-color: rgba(255, 138, 0, 0.65); background: rgba(255, 138, 0, 0.08); }
+.rp-ev-clock {
+  flex: none;
+  min-width: 96px;
+  font-family: var(--num);
+  font-variant-numeric: tabular-nums;
+  color: var(--tx-dim);
+  font-size: 13px;
+}
+.rp-ev-chip {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 46px; height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--mk-bg, #E0132F);
+  color: var(--mk-ink, #fff);
+  font: 800 12px/1 var(--num);
+  letter-spacing: 0.04em;
+}
+.rp-ev-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 13.5px;
+}
+.rp-ev .btn { flex: none; }
+
+/* 停用態按鈕（回放分頁的傳輸列等） */
+.btn:disabled { opacity: 0.38; cursor: not-allowed; }

@@ -17,6 +17,7 @@
     </div>
     <nav id="tabbar">
       <button class="tab-btn active" data-tab="live">比賽</button>
+      <button class="tab-btn" data-tab="replay" id="tabBtnReplay">回放</button>
       <button class="tab-btn" data-tab="auto">自動化</button>
       <button class="tab-btn" data-tab="setup">設定</button>
     </nav>
@@ -249,6 +250,58 @@
           </div>
         </div>
       </div>
+    </aside>
+  </section>
+
+  <!-- ==================================================== 分頁 / 回放 -->
+  <section class="tab-page" id="tab-replay">
+    <div class="replay-main">
+
+      <!-- 回放控制 -->
+      <div class="card dense" id="cardReplayCtl">
+        <div class="card-title">回放控制 <span class="hint">以事件日誌倒推畫面；計時器仍由人手控制</span> <span class="ib-status" id="rpStatus">未啟動</span></div>
+        <div class="row">
+          <button class="btn primary lg" id="rpToggleBtn">進入回放</button>
+          <span class="lbl">計分板</span>
+          <div class="seg grow" id="rpTierSeg">
+            <button class="seg-btn" data-tier="off">關閉</button>
+            <button class="seg-btn" data-tier="small">小型</button>
+            <button class="seg-btn" data-tier="large">大型</button>
+          </div>
+        </div>
+        <div class="switch-row"><span>顯示隊伍分數（關閉後計分板只剩賽事名稱＋時間）</span><input type="checkbox" id="rpScores" class="switch-input"><div class="seg seg-toggle" data-for="rpScores"><button type="button" class="seg-btn" data-val="0">關閉</button><button type="button" class="seg-btn" data-val="1">開啟</button></div></div>
+        <p class="hint">回放中 Overlay 的比分／資訊橫幅／事件圖標依日誌倒推；顯示分數時畫面正下方出現圓弧時間軸。「比賽」分頁的畫面選擇在回放期間暫不生效，結束回放即還原現場。</p>
+      </div>
+
+      <!-- 時間軸 -->
+      <div class="card dense" id="cardReplayTl">
+        <div class="card-title">時間軸 <span class="hint">拖動不可穿過事件點；跨點請用跳轉按鈕或播放</span> <b class="rp-time" id="rpTimeInfo">--:-- / --:--</b></div>
+        <div class="row rp-transport">
+          <button class="btn" id="rpToStart" title="跳到時間軸開頭">|«</button>
+          <button class="btn" data-rpnudge="-10000">−10s</button>
+          <button class="btn" data-rpnudge="-5000">−5s</button>
+          <button class="btn primary lg" id="rpPlayBtn">▶ 播放</button>
+          <button class="btn" data-rpnudge="5000">+5s</button>
+          <button class="btn" data-rpnudge="10000">+10s</button>
+          <button class="btn" id="rpToEnd" title="跳到時間軸結尾">»|</button>
+        </div>
+        <div class="rp-track" id="rpTrack">
+          <div class="rp-track-line"></div>
+          <div class="rp-track-done" id="rpTrackDone"></div>
+          <div class="rp-track-marks" id="rpTrackMarks"></div>
+          <div class="rp-thumb" id="rpThumb"></div>
+        </div>
+        <div class="rp-events" id="rpEvents"></div>
+      </div>
+
+    </div>
+
+    <!-- 預覽（進入本分頁時才載入 iframe；與 OBS 同一份 /overlay） -->
+    <aside class="replay-side">
+      <div class="preview-frame" id="rpPreviewFrame" data-bg="pitch">
+        <div class="pv-layer pv-grid"></div>
+      </div>
+      <p class="hint">預覽與 OBS 完全同源，僅供操作參考；背景樣式沿用「設定 → 預覽背景」的格線。</p>
     </aside>
   </section>
 

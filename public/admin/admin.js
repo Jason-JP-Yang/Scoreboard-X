@@ -246,6 +246,18 @@ function refresh(s) {
     seg.querySelectorAll('.seg-btn').forEach(b =>
       b.classList.toggle('active', b.dataset.nm === nmv(seg.dataset.tier)));
   });
+  const fsq = s.board.flagShow || {};
+  document.querySelectorAll('.flag-seg').forEach(seg => {
+    const on = fsq[seg.dataset.tier] !== false;
+    seg.querySelectorAll('.seg-btn').forEach(b =>
+      b.classList.toggle('active', (b.dataset.flag === '1') === on));
+  });
+  const em = s.board.eventMode || {};
+  const emv = k => (typeof em === 'string' ? em : ((em && em[k]) || 'full'));
+  document.querySelectorAll('.ev-seg').forEach(seg => {
+    seg.querySelectorAll('.seg-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.ev === emv(seg.dataset.tier)));
+  });
   const goalEffect = s.board.goalEffect || 'full';
   document.querySelectorAll('#goalEffectSeg .seg-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.effect === goalEffect));
@@ -316,6 +328,7 @@ function refresh(s) {
   /* info card */
   $('swEvent').checked = !!s.event.visible;
   setVal($('eventText'), s.event.text);
+  setVal($('eventShort'), s.event.short || '');
   $('swPeriod').checked = !!s.period.visible;
   setVal($('periodText'), s.period.text);
   document.querySelectorAll('#periodChips .chip').forEach(c =>
@@ -376,6 +389,7 @@ function refresh(s) {
   renderBbPicker();
   renderOrgList();
   renderCornerGrid();
+  renderFlagPickers();
   hkSyncFromState(s);   // keyboard shortcuts now live in server state
   syncToggleSegs();   // every 開關 above wrote its hidden checkbox — paint the segs
   if (sliderRowsDirty) { sliderRowsDirty = false; syncSegWidths(); }
@@ -851,7 +865,7 @@ $('ibHideBtn').addEventListener('click', () => act('info.hide'));
 
 const noExt = f => String(f).replace(/\.[^.]+$/, '');
 
-let assetsList = { banner: [], corner: [] };   // folder listings, from every SSE payload
+let assetsList = { banner: [], corner: [], flag: [] };   // folder listings, from every SSE payload
 let bbSel = null;                              // { kind, group?, entryId?, file? }
 let bbFilterText = '';
 let lastBbKey = '';
@@ -1182,6 +1196,46 @@ function flashCornerNote(msg) {
   }, 2000);
 }
 
+/* per-team flag picker — single-select from assets/flag, plus a 無 (none) option.
+   Cheap keyed skip like renderCornerGrid so SSE reflows don't rebuild constantly. */
+let lastFlagKey = '';
+function renderFlagPickers() {
+  if (!st) return;
+  const files = assetsList.flag || [];
+  const key = JSON.stringify([files, st.teams.A.flag, st.teams.B.flag]);
+  if (key === lastFlagKey) return;
+  lastFlagKey = key;
+  for (const team of ['A', 'B']) {
+    const host = $('flagPick' + team);
+    if (!host) continue;
+    host.innerHTML = '';
+    const cur = (st.teams[team].flag || '').trim();
+    const none = document.createElement('button');
+    none.className = 'flag-cell flag-none' + (cur ? '' : ' on');
+    none.textContent = '無';
+    none.title = '不顯示國旗';
+    none.addEventListener('click', () => patch({ teams: { [team]: { flag: '' } } }));
+    host.append(none);
+    for (const file of files) {
+      const cell = document.createElement('button');
+      cell.className = 'flag-cell' + (file === cur ? ' on' : '');
+      cell.title = noExt(file);
+      const img = document.createElement('img');
+      img.src = '/assets/flag/' + encodeURIComponent(file);
+      img.alt = '';
+      cell.append(img);
+      cell.addEventListener('click', () => patch({ teams: { [team]: { flag: file } } }));
+      host.append(cell);
+    }
+    if (!files.length) {
+      const note = document.createElement('span');
+      note.className = 'flag-empty hint';
+      note.textContent = '把國旗圖檔放到 public/assets/flag/';
+      host.append(note);
+    }
+  }
+}
+
 /* timer */
 function toggleTimer() { if (st) act(st.timer.running ? 'timer.pause' : 'timer.start'); }
 $('startPause').addEventListener('click', toggleTimer);
@@ -1234,6 +1288,12 @@ document.querySelectorAll('.nm-seg').forEach(seg => {
   const tier = seg.dataset.tier;
   seg.querySelectorAll('.seg-btn').forEach(b => {
     b.addEventListener('click', () => patch({ board: { nameMode: { [tier]: b.dataset.nm } } }));
+  });
+});
+document.querySelectorAll('.flag-seg').forEach(seg => {
+  const tier = seg.dataset.tier;
+  seg.querySelectorAll('.seg-btn').forEach(b => {
+    b.addEventListener('click', () => patch({ board: { flagShow: { [tier]: b.dataset.flag === '1' } } }));
   });
 });
 document.querySelectorAll('#goalEffectSeg .seg-btn').forEach(b => {
@@ -1317,9 +1377,14 @@ for (const [rangeId, valId, key] of [
 
 /* info */
 $('swEvent').addEventListener('change', e => patch({ event: { visible: e.target.checked } }));
-function applyEvent() { patch({ event: { text: $('eventText').value.trim() } }); }
-$('eventBtn').addEventListener('click', applyEvent);
-$('eventText').addEventListener('keydown', e => { if (e.key === 'Enter') { applyEvent(); e.target.blur(); } });
+$('eventText').addEventListener('change', e => patch({ event: { text: e.target.value } }));
+$('eventShort').addEventListener('change', e => patch({ event: { short: e.target.value } }));
+document.querySelectorAll('.ev-seg').forEach(seg => {
+  const tier = seg.dataset.tier;
+  seg.querySelectorAll('.seg-btn').forEach(b => {
+    b.addEventListener('click', () => patch({ board: { eventMode: { [tier]: b.dataset.ev } } }));
+  });
+});
 $('swPeriod').addEventListener('change', e => patch({ period: { visible: e.target.checked } }));
 document.querySelectorAll('#periodChips .chip').forEach(c => {
   c.addEventListener('click', () => patch({ period: { text: c.dataset.p } }));
@@ -1388,7 +1453,7 @@ function rosterStreamAdmin(t) {
 }
 function rosterAvailH() {
   const margin = Math.round(Number((st.board && st.board.margin) || 0));
-  if (st.board && st.board.tier === 'full') {
+  if (st.board && (st.board.tier === 'full' || st.board.tier === 'preparing')) {
     const scale = Number(st.board.scale) || 1;
     const baseW = 1920 - 2 * margin, capW = 1920 - 2 * Math.max(0, margin);
     const fullScale = Math.min(scale, baseW > 0 ? capW / baseW : 1);
@@ -2435,6 +2500,7 @@ const HK_GROUPS = [
     ['tierSmall', '計分板 → 小型', '#tierSeg .seg-btn[data-tier="small"]'],
     ['tierLarge', '計分板 → 大型', '#tierSeg .seg-btn[data-tier="large"]'],
     ['tierFull', '計分板 → 全畫幅', '#tierSeg .seg-btn[data-tier="full"]'],
+    ['tierPreparing', '計分板 → PREPARING', '#tierSeg .seg-btn[data-tier="preparing"]'],
     ['pd1', '節次 → 1ST HALF', '#periodChips .chip[data-p="1ST HALF"]'],
     ['pd2', '節次 → 2ND HALF', '#periodChips .chip[data-p="2ND HALF"]'],
     ['pdHT', '節次 → HALFTIME', '#periodChips .chip[data-p="HALFTIME"]'],
@@ -2671,7 +2737,7 @@ connect({
   onSync(msg) {
     matchesSummary = msg.matches || [];
     activeMatchId = msg.activeMatchId || null;
-    assetsList = msg.assets || { banner: [], corner: [] };
+    assetsList = msg.assets || { banner: [], corner: [], flag: [] };
     bbSeqRunInfo = msg.bbSeqRun || null;
     refresh(msg.state);
     renderMatches();

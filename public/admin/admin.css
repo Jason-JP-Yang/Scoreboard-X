@@ -548,6 +548,24 @@ input[type='color'] {
 .pal-strip { display: flex; height: 26px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
 .pal-strip i { flex: 1; }
 
+/* per-team flag picker (assets/flag single-select + 無) */
+.flag-lbl { font-size: 12.5px; color: var(--tx-dim); margin-top: 2px; }
+.flag-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.flag-cell {
+  appearance: none;
+  display: flex; align-items: center; justify-content: center;
+  height: 34px; min-width: 34px; padding: 0;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--tx-dim); font-family: inherit; font-size: 12px;
+  cursor: pointer; overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.flag-cell:hover { border-color: rgba(255, 255, 255, 0.22); }
+.flag-cell.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.flag-cell img { height: 34px; width: auto; display: block; object-fit: contain; }
+.flag-none { padding: 0 12px; font-weight: 600; }
+.flag-empty { font-size: 12px; }
+
 /* ------------------------------------------------------------ roster */
 .r-page-info { font-family: var(--num); font-size: 14px; min-width: 56px; text-align: center; }
 .roster-sec { display: flex; flex-direction: column; }

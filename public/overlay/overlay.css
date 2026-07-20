@@ -49,8 +49,8 @@
   --font-black: 'Archivo Black', 'Arial Black', 'GenShin Gothic', sans-serif;
   --digit-r: 0.62;              /* measured at runtime: digit width / font-size */
 
-  --panel: #0F1116;
-  --panel-2: #14171D;
+  --panel-2: #0F1116;
+  --panel: #071c46;
   --panel-line: rgba(255, 255, 255, 0.2);
   --tx: #F2F4F8;
   --tx-dim: rgba(242, 244, 248, 0.6);
@@ -196,19 +196,20 @@ body.bg-dark { background: #17191E; }
   height: 56px;
   overflow: hidden;
 }
-#fullboard .cell-event { height: 58px; }
+#fullboard .cell-event { height: 62px; }
 .cell-event::after {
   content: '';
   position: absolute; left: 12px; right: 12px; bottom: 0;
   height: 1px; background: var(--panel-line);
 }
 .event-text {
-  font-size: 24px; font-weight: 600;
+  font-size: 26px; font-weight: 600;
   text-transform: uppercase;
   color: rgba(242, 244, 248, 0.94);
   white-space: nowrap;
   padding: 0 20px;
 }
+#fullboard .event-text { font-size: 40px; font-weight: 600; }
 
 /* ----------------------------------------------------------- period */
 .box-period {
@@ -382,6 +383,98 @@ body.bg-dark { background: #17191E; }
   font-size: 34px;
 }
 
+/* ------------------------------------------------------------ team flags
+ * One flag chip per team: uniform HEIGHT, natural aspect, subtle hairline ring.
+ * Shown only when board.flagShow[tier] is on AND the team has a flag file
+ * (JS toggles .flag-on).
+ *   · main board  : inline chip LEFT of the team name (flag+name combo is
+ *     centred in large rows, left-aligned in small rows); FLIP-morphs with
+ *     the name during small<->large.
+ *   · full frame  : enlarged, pinned to the OUTER side of each team column
+ *     (TEAM A far left, TEAM B far right), vertically centred. */
+.team-flag {
+  display: none;
+  align-items: center;
+  overflow: hidden;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22), 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.team-flag.flag-on { display: inline-flex; }
+.team-flag img { height: 100%; width: auto; display: block; }
+
+/* main board: inline flag chip left of the team name (flag+name combo). */
+#board .team-name { gap: 12px; }
+#board .team-flag { align-self: center; flex: 0 0 auto; }
+#board .team.row-large .team-flag { height: 34px; }
+#board .team.row-small .team-flag { height: 26px; }
+
+/* full frame: a BIG framed flag flanking the whole name+score block — TEAM A on
+ * the far left, TEAM B mirrored to the far right. The flag is a sibling of the
+ * name/score wrapper (never inside the name), so it stays put + full size while
+ * PREPARING only enlarges the name. Identical flag in both modes. */
+#fullboard .team { flex-direction: row; align-items: center; gap: 36px; padding: 0 46px; }
+#fullboard .team-b { flex-direction: row-reverse; }
+#fullboard .team-main {
+  flex: 1 1 auto; min-width: 0; height: 100%;
+  display: flex; flex-direction: column; justify-content: center;
+}
+#fullboard .team-flag {
+  flex: 0 0 auto;
+  height: 170px;
+  border: 4px solid rgba(255, 255, 255, 0.94);
+  box-shadow: 0 0 0 1px rgba(13, 15, 19, 0.4), 0 6px 18px rgba(0, 0, 0, 0.32);
+}
+
+/* ========================================================== PREPARING
+ * A pre-match variant of the full board, rendered into the SAME #fullboard so
+ * full <-> preparing is a smooth in-place MOVE. Toggling .preparing animates
+ * everything via CSS transitions on inner (non reveal-cell) elements:
+ *   · timer + scores fade out         · PREPARE TO START rises (same size)
+ *   · the flag stays put + full size; only the name enlarges (1.75x — keep in
+ *     sync with fitName's preparing division) and drops to the column centre
+ *   · the centre icon (assets/main) fades + scales in
+ * The period text ('PREPARE TO START') is swapped by JS — a display-only
+ * override that never touches state.period.text. #fullboard.prep-snap kills
+ * every transition for one frame so the class can be dropped while the board
+ * is hidden without replaying the morph on the next reveal. */
+#fullboard .period-pill {
+  transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1), background 0.4s ease;
+  transform-origin: center bottom;
+}
+#fullboard .team-name {
+  transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center;
+}
+#fullboard .team-score,
+#fullboard .clock-tapes,
+#fullboard .clock-word { transition: opacity 0.4s ease; }
+
+.prep-icon {
+  position: absolute;
+  left: 50%; top: 70%;
+  transform: translate(-50%, -50%) scale(0.82);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 4;
+  transition: opacity 0.5s ease, transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.prep-icon img {
+  max-height: 190px; max-width: 330px; display: block;
+  filter: drop-shadow(0 8px 22px rgba(0, 0, 0, 0.35));
+}
+
+#fullboard.preparing .box-period { overflow: visible; }
+#fullboard.preparing .period-pill { transform: translateY(-30px); }
+#fullboard.preparing .box-clock,
+#fullboard.preparing .team-score { opacity: 0; }
+/* score+timer gone -> the enlarged name drops to the column's vertical centre,
+   level with the (unchanged) flag's midline */
+#fullboard.preparing .team-name { transform: translateY(90px) scale(1.75); }
+#fullboard.preparing .prep-icon { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+
+/* one-frame transition kill (see above) */
+#fullboard.prep-snap, #fullboard.prep-snap * { transition: none !important; }
+
 /* ------------------------------------------------------------ tapes */
 .tape-group { display: inline-flex; align-items: center; }
 .tape-slot {
@@ -400,7 +493,7 @@ body.bg-dark { background: #17191E; }
 }
 
 /* ------------------------------------------------------------ swaps */
-.swap-box { position: relative; display: inline-flex; justify-content: center; perspective: 320px; }
+.swap-box { position: relative; display: inline-flex; justify-content: center; perspective: 320px; align-items: center; }
 .swap-box .swap-out { position: absolute; left: 50%; transform: translateX(-50%); white-space: nowrap; }
 .swap-cur, .swap-out { display: inline-flex; white-space: nowrap; }
 .lt { display: inline-block; will-change: transform, opacity; }
@@ -591,7 +684,7 @@ body.bg-dark { background: #17191E; }
   position: relative; z-index: 2;
   display: flex; flex-direction: column; justify-content: center;
   gap: 5px;
-  padding: 0 46px;
+  padding: 0 40px;
   min-width: 0;
 }
 .bb-name {

@@ -30,8 +30,10 @@ const MATCHES_FILE = path.join(__dirname, 'matches.json');
 
 const DEFAULT_STATE = {
   board: {
-    tier: 'large',            // off | small | large | full
+    tier: 'large',            // off | small | large | full | preparing
     nameMode: { small: 'short', large: 'short', full: 'short' }, // short | full per tier
+    flagShow: { small: true, large: true, full: true },          // show team flags per tier (preparing follows full)
+    eventMode: { small: 'full', large: 'full', full: 'full' },   // event name style per tier: full | short (preparing follows full)
     scale: 1,                 // overall overlay scale (0.7 - 1.4)
     margin: 36,               // distance from top/left edge, stage px (can be negative)
     goalEffect: 'full',       // goal expand: 'minimal' | 'partial' (scorer row only) | 'full' (both rows)
@@ -40,7 +42,7 @@ const DEFAULT_STATE = {
     driftSpeed: 3,            // facet drift speed multiplier (0.1 - 3.0)
     clockVisible: true,       // show clock + period on overlay
   },
-  event: { text: 'HANDBALL CUP 2026', visible: true },
+  event: { text: 'HANDBALL CUP 2026', short: 'HANDBALL 2026', visible: true },
   period: { text: '1ST HALF', visible: true },
   timer: {
     durationMs: 30 * 60000,
@@ -55,8 +57,8 @@ const DEFAULT_STATE = {
   },
   goalDelta: 1,               // points added by the GOAL button (-19 .. 19, not 0)
   teams: {
-    A: { name: 'OGC NICE', short: 'NICE', color: '#D6152C', score: 0 },
-    B: { name: 'RC LENS', short: 'LENS', color: '#F6C500', score: 0 },
+    A: { name: 'OGC NICE', short: 'NICE', color: '#D6152C', score: 0, flag: '' },
+    B: { name: 'RC LENS', short: 'LENS', color: '#F6C500', score: 0, flag: '' },
   },
   banners: [],                // event icons: { id, team:'A'|'B', type, createdAt, susp? } — manual removal only
   infoBanner: null,           // top-centre info banner: null | { id, key, cat:'REFEREE'|'CONTROL', title, body, tone, fg, shownAt }
@@ -232,13 +234,27 @@ function persist() {
 
 function sanitize() {
   const b = state.board;
-  if (!['off', 'small', 'large', 'full'].includes(b.tier)) b.tier = 'large';
+  if (!['off', 'small', 'large', 'full', 'preparing'].includes(b.tier)) b.tier = 'large';
   {
     const norm = m => (['short', 'full'].includes(m) ? m : 'short');
     const nm = b.nameMode;
     if (typeof nm === 'string') b.nameMode = { small: norm(nm), large: norm(nm), full: norm(nm) };
     else if (isObj(nm)) b.nameMode = { small: norm(nm.small), large: norm(nm.large), full: norm(nm.full) };
     else b.nameMode = { small: 'short', large: 'short', full: 'short' };
+  }
+  {
+    // per-tier flag visibility (default on; preparing follows full)
+    const fs0 = isObj(b.flagShow) ? b.flagShow : {};
+    const on = v => v !== false;   // default true when unset
+    b.flagShow = { small: on(fs0.small), large: on(fs0.large), full: on(fs0.full) };
+  }
+  {
+    // per-tier event-name style (full | short; default full; preparing follows full)
+    const norm = m => (['short', 'full'].includes(m) ? m : 'full');
+    const em = b.eventMode;
+    if (typeof em === 'string') b.eventMode = { small: norm(em), large: norm(em), full: norm(em) };
+    else if (isObj(em)) b.eventMode = { small: norm(em.small), large: norm(em.large), full: norm(em.full) };
+    else b.eventMode = { small: 'full', large: 'full', full: 'full' };
   }
   delete b.visible;
   delete b.expanded;
@@ -253,7 +269,8 @@ function sanitize() {
   if (!['minimal', 'partial', 'full'].includes(b.goalEffect)) b.goalEffect = 'full';
   delete b.autoExpandGoal;
   state.goalDelta = Math.round(clamp(state.goalDelta, -19, 19)) || 1;
-  state.event.text = cleanText(state.event.text, 44, DEFAULT_STATE.event.text);
+  state.event.text = cleanText(state.event.text, 100, DEFAULT_STATE.event.text);
+  state.event.short = cleanText(state.event.short, 50, '');
   state.period.text = cleanText(state.period.text, 22, DEFAULT_STATE.period.text);
   for (const key of ['A', 'B']) {
     const t = state.teams[key];
@@ -261,6 +278,7 @@ function sanitize() {
     t.short = cleanText(t.short, 8, DEFAULT_STATE.teams[key].short) || t.name.slice(0, 4).toUpperCase();
     t.score = Math.round(clamp(t.score, 0, 199));
     if (!/^#[0-9a-fA-F]{6}$/.test(String(t.color))) t.color = DEFAULT_STATE.teams[key].color;
+    t.flag = cleanText(String(t.flag ?? ''), 160, '');   // assets/flag/<file>, empty = none
   }
   delete state.bannerPrefs;
   if (state.infoBanner != null && !isObj(state.infoBanner)) state.infoBanner = null;
@@ -1007,15 +1025,15 @@ function scheduleAutomation() {
 
 function defaultSnap() {
   return clone({
-    event: { text: DEFAULT_STATE.event.text },
+    event: { text: DEFAULT_STATE.event.text, short: DEFAULT_STATE.event.short },
     period: { text: DEFAULT_STATE.period.text },
     timer: {
       durationMs: NEW_MATCH_DURATION, remainingMs: NEW_MATCH_DURATION,
       running: false, refEpoch: 0, mode: 'clock', direction: 'down',
     },
     teams: {
-      A: { name: 'TEAM A', short: 'TEAM A', color: DEFAULT_STATE.teams.A.color, score: 0 },
-      B: { name: 'TEAM B', short: 'TEAM B', color: DEFAULT_STATE.teams.B.color, score: 0 },
+      A: { name: 'TEAM A', short: 'TEAM A', color: DEFAULT_STATE.teams.A.color, score: 0, flag: '' },
+      B: { name: 'TEAM B', short: 'TEAM B', color: DEFAULT_STATE.teams.B.color, score: 0, flag: '' },
     },
     banners: [],
     infoBanner: null,
@@ -1033,7 +1051,7 @@ function matchSnap() {
     roster[k] = state.roster[k].filter(e => !isBlankEntry(e));   // strip blanks from the stored snapshot
   }
   return clone({
-    event: { text: state.event.text },
+    event: { text: state.event.text, short: state.event.short },
     period: { text: state.period.text },
     timer,
     teams: state.teams,
@@ -1048,7 +1066,10 @@ function matchSnap() {
 function sanitizeSnap(src) {
   const snap = defaultSnap();
   if (!isObj(src)) return snap;
-  if (isObj(src.event)) snap.event.text = cleanText(src.event.text, 44, snap.event.text);
+  if (isObj(src.event)) {
+    snap.event.text = cleanText(src.event.text, 100, snap.event.text);
+    snap.event.short = cleanText(src.event.short, 50, '');
+  }
   if (isObj(src.period)) snap.period.text = cleanText(src.period.text, 22, snap.period.text);
   if (isObj(src.timer)) {
     for (const k of ['durationMs', 'remainingMs', 'refEpoch']) {
@@ -1066,6 +1087,7 @@ function sanitizeSnap(src) {
       snap.teams[k].short = cleanText(String(t.short ?? ''), 8, snap.teams[k].short);
       snap.teams[k].score = Math.round(clamp(t.score, 0, 199));
       if (/^#[0-9a-fA-F]{6}$/.test(String(t.color))) snap.teams[k].color = t.color;
+      snap.teams[k].flag = cleanText(String(t.flag ?? ''), 160, '');
     }
   }
   if (Array.isArray(src.banners)) {
@@ -1276,6 +1298,7 @@ function applySnap(m) {
     }
   }
   state.event.text = s.event.text;
+  state.event.short = s.event.short;
   state.period.text = s.period.text;
   for (const k of MATCH_TIMER_KEYS) state.timer[k] = s.timer[k];
   state.teams = s.teams;
@@ -1293,6 +1316,7 @@ function applySnap(m) {
 function freshMatchState() {
   const d = defaultSnap();
   state.event.text = d.event.text;
+  state.event.short = d.event.short;
   state.period.text = d.period.text;
   for (const k of MATCH_TIMER_KEYS) state.timer[k] = d.timer[k];
   state.teams = d.teams;
@@ -1891,12 +1915,14 @@ function applyAction(action) {
 const ASSET_DIRS = {
   banner: path.join(PUBLIC_DIR, 'assets', 'banner'),
   corner: path.join(PUBLIC_DIR, 'assets', 'corner'),
+  flag: path.join(PUBLIC_DIR, 'assets', 'flag'),
+  main: path.join(PUBLIC_DIR, 'assets', 'main'),   // PREPARING centre icon
 };
 const IMG_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg', '.avif', '.bmp']);
-let assetsCache = { at: 0, list: { banner: [], corner: [] } };
+let assetsCache = { at: 0, list: { banner: [], corner: [], flag: [], main: [] } };
 function listAssets() {
   if (Date.now() - assetsCache.at < 5000) return assetsCache.list;
-  const list = { banner: [], corner: [] };
+  const list = { banner: [], corner: [], flag: [], main: [] };
   for (const key of Object.keys(ASSET_DIRS)) {
     try {
       list[key] = fs.readdirSync(ASSET_DIRS[key])

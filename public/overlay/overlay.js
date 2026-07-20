@@ -300,11 +300,13 @@ function makeView(root, kind) {
         root: q('.team-a'), bg: q('[data-team-bg="A"]'), bar: q('.team-a .team-bar'), flash: q('.team-a .team-flash'),
         name: q('.team-a .team-name'), nameBox: q('.team-a .name-swap'),
         score: q('.team-a .team-score'), tapeHost: q('.team-a .score-tape'),
+        flag: q('[data-team-flag="A"]'), flagImg: q('[data-team-flag="A"] img'),
       },
       B: {
         root: q('.team-b'), bg: q('[data-team-bg="B"]'), bar: q('.team-b .team-bar'), flash: q('.team-b .team-flash'),
         name: q('.team-b .team-name'), nameBox: q('.team-b .name-swap'),
         score: q('.team-b .team-score'), tapeHost: q('.team-b .score-tape'),
+        flag: q('[data-team-flag="B"]'), flagImg: q('[data-team-flag="B"] img'),
       },
     },
     goalWordActive: { A: false, B: false },
@@ -324,6 +326,18 @@ const rails = {
   A: boardEl.querySelector('.icon-rail.rail-a'),
   B: boardEl.querySelector('.icon-rail.rail-b'),
 };
+
+/* PREPARING centre icon (fixed image from assets/main; server enumerates it) */
+const prepIcon = fullEl.querySelector('.prep-icon');
+const prepIconImg = prepIcon.querySelector('img');
+let assetsMain = [];
+function updatePrepIcon() {
+  const file = assetsMain[0] || 'image.png';
+  if (prepIconImg.dataset.file !== file) {
+    prepIconImg.dataset.file = file;
+    prepIconImg.src = '/assets/main/' + encodeURIComponent(file);
+  }
+}
 
 /* ======================================================== word swaps */
 
@@ -433,7 +447,12 @@ function fitName(v, t) {
   if (v === mainV && rowModeFor(t) === 'small') return;   // small row grows instead
   const nameEl = v.teams[t].name;
   const cs = getComputedStyle(nameEl);
-  const avail = nameEl.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  let avail = nameEl.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+  if (v === fullV && fullEl.classList.contains('preparing')) avail /= 1.75;  // name renders scaled 1.75x
+  const flagEl = v.teams[t].flag;
+  if (flagEl && flagEl.classList.contains('flag-on') && nameEl.contains(flagEl)) {
+    avail -= flagEl.offsetWidth + (parseFloat(cs.columnGap) || 12);          // main board: inline flag chip + gap
+  }
   const w = cur.offsetWidth;
   if (w > avail && avail > 0) {
     const base = parseFloat(cs.fontSize);
@@ -521,6 +540,48 @@ const nameFor = (v, team) => {
 function setName(v, t, { instant = false } = {}) {
   letterSwap(v.teams[t].nameBox, nameFor(v, t), { instant });
   fitName(v, t);
+}
+
+/* per-tier flag visibility: board.flagShow = { small, large, full } (preparing follows
+ * full). A flag shows only when its tier toggle is on AND the team has a flag file. */
+function flagShowFor(v, team) {
+  const fsq = st && st.board.flagShow;
+  const key = v === fullV ? 'full' : rowModeFor(team);
+  const on = fsq ? (fsq[key] !== false) : true;
+  return on && !!(st.teams[team].flag || '').trim();
+}
+function setFlag(v, t) {
+  const cell = v.teams[t].flag, img = v.teams[t].flagImg;
+  if (!cell) return;
+  const file = (st.teams[t].flag || '').trim();
+  if (file) {
+    if (img.dataset.file !== file) { img.dataset.file = file; img.src = '/assets/flag/' + encodeURIComponent(file); }
+  } else if (img.dataset.file) {
+    img.dataset.file = ''; img.removeAttribute('src');
+  }
+  cell.classList.toggle('flag-on', flagShowFor(v, t));
+}
+
+/* per-tier event-name style: board.eventMode = { small, large, full } (full | short).
+ * Main board follows its live base mode; full board (and PREPARING) use 'full'.
+ * An empty short name falls back to the full name. */
+function eventTextFor(v) {
+  const em = st && st.board.eventMode;
+  const key = v === fullV ? 'full' : mainMode;
+  const short = (typeof em === 'string' ? em === 'short' : (em && em[key]) === 'short');
+  const sh = (st.event.short || '').trim();
+  return (short && sh ? sh : (st.event.text || '')).toUpperCase();
+}
+function refreshEvent(v) {
+  swapWord(v.eventBox, eventTextFor(v), { instant: !v.visible });
+  fitEvent(v);
+}
+
+/* PREPARING shows a fixed 'PREPARE TO START' in the full board's period pill —
+ * a display-only override; state.period.text is never touched. */
+function periodTextFor(v) {
+  if (v === fullV && st && st.board.tier === 'preparing') return 'PREPARE TO START';
+  return (st.period.text || '').toUpperCase();
 }
 
 /* ------------------------------------------- main-board width choreography */
@@ -627,6 +688,7 @@ function applyRowModes() {
     setRowClass(t, mode);
     boardEl.style.setProperty(t === 'A' ? '--row-a' : '--row-b', mode === 'large' ? '150px' : '56px');
     fitName(mainV, t);
+    setFlag(mainV, t);
   }
   fitEvent(mainV);
 }
@@ -700,11 +762,11 @@ function scoreBounceIn(v, t) {
     .finished.then(() => { cancelRun(scoreEl, 'sbounce'); scoreEl.style.transform = ''; }).catch(() => {});
 }
 
-/* team-name FLIP that BLENDS with the width glide (item 2): the after-rect is measured
+/* FLIP that BLENDS with the width glide (item 2): the after-rect is measured
  * at the START board width, so the transform (delta -> 0) and the real width reflow —
- * driven by the same easing — sum to a smooth slide instead of double-moving the name. */
-function nameBlend(v, t, before, atWb, ease) {
-  const box = v.teams[t].nameBox;
+ * driven by the same easing — sum to a smooth slide instead of double-moving.
+ * Used for the team name box AND its inline flag chip. */
+function flipBlend(box, before, atWb, ease) {
   const a = atWb || box.getBoundingClientRect();
   if (!before || !before.width || !before.height || !a || !a.width || !a.height) return;
   const k = stageScale * boardScaleVar();
@@ -766,8 +828,13 @@ function morphBoard() {
   const ease = expand ? MORPH_EXPAND : MORPH_COLLAPSE;
 
   /* BEFORE geometry (names + current row heights + board width) */
-  const nameBefore = {}, rowBefore = {};
-  for (const t of changed) { nameBefore[t] = v.teams[t].nameBox.getBoundingClientRect(); rowBefore[t] = teamRowPx(t); }
+  const nameBefore = {}, rowBefore = {}, flagBefore = {};
+  for (const t of changed) {
+    nameBefore[t] = v.teams[t].nameBox.getBoundingClientRect();
+    rowBefore[t] = teamRowPx(t);
+    const f = v.teams[t].flag;
+    flagBefore[t] = f.classList.contains('flag-on') ? f.getBoundingClientRect() : null;
+  }
   const widthBefore = boardEl.offsetWidth;
 
   /* the changed rows' old scores leave at once (ghosts captured at their current spot);
@@ -775,9 +842,10 @@ function morphBoard() {
   for (const t of changed) scoreGhostOut(v, t, expand ? SCORE_OUT_DUR : SCORE_OUT_COLLAPSE);
 
   /* switch the changed rows to their target styling (grid tracks pinned to BEFORE below) */
-  for (const t of changed) { cancelRun(v.teams[t].nameBox, 'flip'); cancelRun(v.grid, 'row-' + t); v.teams[t].nameBox.style.minWidth = ''; }
+  for (const t of changed) { cancelRun(v.teams[t].nameBox, 'flip'); cancelRun(v.teams[t].flag, 'flip'); cancelRun(v.grid, 'row-' + t); v.teams[t].nameBox.style.minWidth = ''; }
   cancelRun(boardEl, 'morphw'); cancelRun(boardEl, 'namew');
   for (const t of changed) setRowClass(t, want(t));
+  for (const t of changed) setFlag(mainV, t);   // per-tier flagShow may differ small vs large
   /* per-row name text can change with the mode (per-tier nameMode) -> ride letterSwap not FLIP */
   const nameSwap = {};
   for (const t of changed) {
@@ -794,8 +862,12 @@ function morphBoard() {
   /* measure each gliding name at the START width (final font already applied) for nameBlend */
   boardEl.style.maxWidth = 'none';
   boardEl.style.width = widthBefore + 'px';
-  const nameAtWb = {};
-  for (const t of changed) if (!v.goalWordActive[t] && !nameSwap[t]) nameAtWb[t] = v.teams[t].nameBox.getBoundingClientRect();
+  const nameAtWb = {}, flagAtWb = {};
+  for (const t of changed) {
+    if (!v.goalWordActive[t] && !nameSwap[t]) nameAtWb[t] = v.teams[t].nameBox.getBoundingClientRect();
+    const f = v.teams[t].flag;
+    flagAtWb[t] = f.classList.contains('flag-on') ? f.getBoundingClientRect() : null;
+  }
 
   /* ---- animate ---- */
   /* board width glide (real reflow; maxWidth off so the pin isn't clamped) */
@@ -817,7 +889,8 @@ function morphBoard() {
       { duration: MORPH_DUR, easing: easeOf(ease), fill: 'forwards' })
       // set the resting track on #board BEFORE cancelling so the grid never reverts to rowBefore
       .finished.then(() => { if (alive('morph', tok)) { boardEl.style.setProperty(varName, rowAfter + 'px'); v.grid.style.removeProperty(varName); cancelRun(v.grid, 'row-' + t); } }).catch(() => {});
-    if (!v.goalWordActive[t] && !nameSwap[t]) nameBlend(v, t, nameBefore[t], nameAtWb[t], ease);
+    if (!v.goalWordActive[t] && !nameSwap[t]) flipBlend(v.teams[t].nameBox, nameBefore[t], nameAtWb[t], ease);
+    if (flagBefore[t] && flagAtWb[t]) flipBlend(v.teams[t].flag, flagBefore[t], flagAtWb[t], ease);
     themeMorphRow(v, t, want(t) === 'large');
     scoreBounceIn(v, t);
   }
@@ -825,13 +898,38 @@ function morphBoard() {
 
 /* ------------------------------------------------------- tier machine */
 
+const isFullTier = t => t === 'full' || t === 'preparing';
+
+/* flip the PREPARING layout class. instant = one-frame transition kill
+ * (.prep-snap), used whenever the swap must not play the in-place morph
+ * (board hidden, or a reveal that should start from the resting state). */
+function setPreparing(on, { instant = false } = {}) {
+  if (fullEl.classList.contains('preparing') === on) return;
+  if (instant) fullEl.classList.add('prep-snap');
+  fullEl.classList.toggle('preparing', on);
+  if (instant) { void fullEl.offsetWidth; fullEl.classList.remove('prep-snap'); }
+}
+
+/* hide the full board; once it is REALLY hidden, drop the PREPARING layout
+ * silently so the next full-frame reveal starts from the correct resting state
+ * (leaving the class on would replay the prep morph over the next show). */
+function hideFullView() {
+  hideView(fullV).then(() => {
+    if (fullEl.classList.contains('is-hidden') && !isFullTier(tierShown)) {
+      setPreparing(false, { instant: true });
+    }
+  });
+}
+
 function applyTierInstant(want) {
   const mainOn = want === 'small' || want === 'large';
   if (mainOn) setMainMode(want);
+  setPreparing(want === 'preparing', { instant: true });
+  updatePrepIcon();
   if (mainOn && !mainV.visible && st) renderAllView(mainV, st);
-  if (want === 'full' && !fullV.visible && st) renderAllView(fullV, st);
+  if (isFullTier(want) && !fullV.visible && st) renderAllView(fullV, st);
   mainV.visible = mainOn;
-  fullV.visible = want === 'full';
+  fullV.visible = isFullTier(want);
   boardEl.classList.toggle('is-hidden', !mainV.visible);
   fullEl.classList.toggle('is-hidden', !fullV.visible);
 }
@@ -846,31 +944,48 @@ function applyTier({ instant = false } = {}) {
 
   if (instant || firstPaint) { applyTierInstant(want); return; }
 
+  // full <-> preparing: morph in place within the SAME #fullboard (no hide/show).
+  // Toggling .preparing drives every CSS transition (timer/scores fade, PREPARE
+  // TO START grows centred, names glide + enlarge, centre icon fades in); the
+  // period text crossfades and the names re-fit to their scaled width.
+  if (isFullTier(from) && isFullTier(want)) {
+    setPreparing(want === 'preparing');
+    updatePrepIcon();
+    swapWord(fullV.periodBox, periodTextFor(fullV), {});
+    for (const t of ['A', 'B']) fitName(fullV, t);
+    return;
+  }
+
   if (want === 'off') {
-    if (from === 'full') { hideView(fullV); holdRosterReflow(FULL_HIDE_WIPE_AT); }
+    if (isFullTier(from)) { hideFullView(); holdRosterReflow(FULL_HIDE_WIPE_AT); }
     else hideView(mainV);
     return;
   }
   if (from === 'off') {
-    if (want === 'full') {
-      withBottomClear(() => { if (tierShown === 'full') { renderAllView(fullV, st); showView(fullV); } });
+    if (isFullTier(want)) {
+      setPreparing(want === 'preparing', { instant: true });
+      updatePrepIcon();
+      withBottomClear(() => { if (isFullTier(tierShown)) { renderAllView(fullV, st); showView(fullV); } });
     } else { setMainMode(want); renderAllView(mainV, st); showView(mainV); }
     return;
   }
-  if (from === 'full') {          // full -> small | large (simultaneous)
-    hideView(fullV);
+  if (isFullTier(from)) {       // full / preparing -> small | large (simultaneous)
+    hideFullView();
     holdRosterReflow(FULL_HIDE_WIPE_AT);
     setMainMode(want);
     renderAllView(mainV, st);
     showView(mainV);
     return;
   }
-  if (want === 'full') {          // small | large -> full (simultaneous)
+  if (isFullTier(want)) {       // small | large -> full / preparing (simultaneous)
     hideView(mainV);
-    withBottomClear(() => { if (tierShown === 'full') { renderAllView(fullV, st); showView(fullV); } });
+    setPreparing(want === 'preparing', { instant: true });
+    updatePrepIcon();
+    withBottomClear(() => { if (isFullTier(tierShown)) { renderAllView(fullV, st); showView(fullV); } });
     return;
   }
   mainMode = want;                // small <-> large : base row-mode change
+  refreshEvent(mainV);            // per-tier event style may differ small vs large
   morphBoard();                   // morph both rows, board stays on screen
 }
 
@@ -913,6 +1028,11 @@ const CLIP_OPEN = 'inset(0% 0 0% 0)';
 const CLIP_SHUT = { main: 'inset(0 0 100% 0)', full: 'inset(100% 0 0 0)' };
 
 function revealCellsV(v) {
+  // PREPARING hides the clock entirely, so it must NOT ride the reveal wipe
+  // (that would flash the timer in before it settles to opacity 0).
+  if (v === fullV && fullEl.classList.contains('preparing')) {
+    return [v.cellEvent, v.boxPeriod, v.teams.A.root, v.teams.B.root];
+  }
   return [v.cellEvent, v.boxPeriod, v.boxClock, v.teams.A.root, v.teams.B.root];
 }
 
@@ -941,6 +1061,12 @@ async function showView(v) {
       { transform: 'none', opacity: 1 },
     ], { duration: 520, delay: 120 + i * 75, easing: OUT_5, fill: 'backwards' });
   });
+  if (v === fullV && fullEl.classList.contains('preparing')) {
+    run(prepIcon, 'vis', [
+      { opacity: 0, transform: 'translate(-50%, -50%) scale(0.8)' },
+      { opacity: 1, transform: 'translate(-50%, -50%) scale(1)' },
+    ], { duration: 560, delay: 260, easing: OUT_5, fill: 'backwards' });
+  }
   if (v === mainV) {
     for (const t of ['A', 'B']) {
       run(rails[t], 'vis', [{ opacity: 0 }, { opacity: 1 }], { duration: 420, delay: 280, easing: OUT_5, fill: 'backwards' });
@@ -959,6 +1085,12 @@ async function hideView(v) {
       { transform: `translateY(${toY}px)`, opacity: 0 },
     ], { duration: 230, delay: i * 45, easing: EXIT, fill: 'forwards' });
   });
+  if (v === fullV && fullEl.classList.contains('preparing')) {
+    run(prepIcon, 'vis', [
+      { opacity: 1, transform: 'translate(-50%, -50%) scale(1)' },
+      { opacity: 0, transform: 'translate(-50%, -50%) scale(0.85)' },
+    ], { duration: 240, easing: EXIT, fill: 'forwards' });
+  }
   if (v === mainV) {
     for (const t of ['A', 'B']) {
       run(rails[t], 'vis', [{ opacity: 1 }, { opacity: 0 }], { duration: 200, easing: EXIT, fill: 'forwards' });
@@ -982,6 +1114,7 @@ async function hideView(v) {
   cancelRun(v.bg, 'vis');
   cancelRun(v.grid, 'vis');
   cancelRun(v.glow, 'vis');
+  if (v === fullV) cancelRun(prepIcon, 'vis');
   if (v === mainV) for (const t of ['A', 'B']) cancelRun(rails[t], 'vis');
   v.bg.style.clipPath = '';
   v.grid.style.clipPath = '';
@@ -1213,7 +1346,7 @@ async function goalWordShow(v, team) {
 function onGoalFx(team, score, delta = 1) {
   if (!st) return;
   const eff = effTier();
-  if (eff === 'off') {
+  if (eff === 'off' || eff === 'preparing') {   // scores hidden — update quietly, no celebration
     for (const v of views) updateScoreSilent(v, team, score);
     return;
   }
@@ -1827,7 +1960,7 @@ function rosterStream(t) {
  * the board is off; above the full board (measured) while it is on. */
 function rosterAvailH() {
   const margin = Math.round(Number(st.board.margin) || 0);
-  if (effTier() === 'full') {
+  if (isFullTier(effTier())) {
     let fullH = 340;
     if (!fullEl.classList.contains('is-hidden')) {
       const h = fullEl.getBoundingClientRect().height / (stageScale || 1);
@@ -1912,7 +2045,7 @@ function rosterWantVisible(t) {
   const mode = (st.rosterDisplay && st.rosterDisplay.mode) || 'off';
   if (mode !== 'both' && mode !== t) return false;
   const tier = effTier();
-  if (tier !== 'off' && tier !== 'full') return false;
+  if (tier !== 'off' && !isFullTier(tier)) return false;
   return namedEntries(t).length > 0;
 }
 function rosterRenderSig(t, layout, page) {
@@ -2272,7 +2405,7 @@ function updateRosters({ instant = false } = {}) {
     else {
       rosterRefresh(t, layout, page, {
         reflow: rosterSkeleton(sig) !== rosterSkeleton(r.renderSig),
-        urgent: effTier() === 'full',
+        urgent: isFullTier(effTier()),
       });
     }
   }
@@ -2708,9 +2841,9 @@ function renderAllView(v, s) {
   // period collapses vertically with the clock row, horizontally on its own
   toggleCell(v.boxPeriod, clk, 'y', { instant: true });
   toggleCell(v.boxPeriod, s.period.visible, 'x', { instant: true });
-  swapWord(v.eventBox, s.event.text.toUpperCase(), { instant: true });
+  swapWord(v.eventBox, eventTextFor(v), { instant: true });
   fitEvent(v);
-  swapWord(v.periodBox, s.period.text.toUpperCase(), { instant: true });
+  swapWord(v.periodBox, periodTextFor(v), { instant: true });
   for (const t of ['A', 'B']) {
     bump('gw-' + v.kind + t);           // cancel pending GOAL-word restores
     v.goalWordActive[t] = false;
@@ -2719,7 +2852,11 @@ function renderAllView(v, s) {
     v.teams[t].nameBox.style.transformOrigin = '';
     v.teams[t].nameBox.style.transform = '';
     v.teams[t].nameBox.style.minWidth = '';
+    cancelRun(v.teams[t].flag, 'flip');
+    v.teams[t].flag.style.transformOrigin = '';
+    v.teams[t].flag.style.transform = '';
     setName(v, t, { instant: true });
+    setFlag(v, t);
     cancelRun(v.teams[t].score, 'sxf');
     cancelRun(v.teams[t].score, 'sbounce');
     v.teams[t].score.style.opacity = '';
@@ -2752,7 +2889,9 @@ function renderAll(s) {
   mainMode = tierShown === 'small' ? 'small' : 'large';
   applyRowModes();            // per-row classes + grid tracks + width cap
   mainV.visible = tierShown === 'small' || tierShown === 'large';
-  fullV.visible = tierShown === 'full';
+  fullV.visible = isFullTier(tierShown);
+  setPreparing(tierShown === 'preparing', { instant: true });
+  updatePrepIcon();
   boardEl.classList.toggle('is-hidden', !mainV.visible);
   fullEl.classList.toggle('is-hidden', !fullV.visible);
   renderAllView(mainV, s);
@@ -2764,7 +2903,12 @@ function renderAll(s) {
   updateCornerLogos({ instant: true });
 }
 
-function onSync({ state: s, fx }) {
+function onSync(msg) {
+  const s = msg.state, fx = msg.fx;
+  if (msg.assets && Array.isArray(msg.assets.main)
+      && JSON.stringify(msg.assets.main) !== JSON.stringify(assetsMain)) {
+    assetsMain = msg.assets.main; updatePrepIcon();
+  }
   const p = st;
   st = s;
   if (firstPaint) {
@@ -2815,17 +2959,26 @@ function onSync({ state: s, fx }) {
   }
 
   /* texts */
-  if (p.event.text !== s.event.text) {
-    for (const v of views) { swapWord(v.eventBox, s.event.text.toUpperCase(), { instant: !v.visible }); fitEvent(v); }
+  if (p.event.text !== s.event.text || p.event.short !== s.event.short
+      || JSON.stringify(p.board.eventMode) !== JSON.stringify(s.board.eventMode)) {
+    for (const v of views) refreshEvent(v);
   }
   if (p.period.text !== s.period.text) {
-    for (const v of views) swapWord(v.periodBox, s.period.text.toUpperCase(), { instant: !v.visible });
+    for (const v of views) swapWord(v.periodBox, periodTextFor(v), { instant: !v.visible });
   }
   for (const t of ['A', 'B']) {
     const nameChanged = p.teams[t].name !== s.teams[t].name || p.teams[t].short !== s.teams[t].short;
     if (!nameChanged) continue;
     for (const v of views) {
       if (!v.goalWordActive[t]) setName(v, t, { instant: !v.visible });
+    }
+  }
+
+  /* team flags — a team's flag file changed, or a per-tier show toggle flipped */
+  {
+    const fsChanged = JSON.stringify(p.board.flagShow) !== JSON.stringify(s.board.flagShow);
+    for (const t of ['A', 'B']) {
+      if (fsChanged || p.teams[t].flag !== s.teams[t].flag) for (const v of views) setFlag(v, t);
     }
   }
 
@@ -2867,6 +3020,9 @@ function frame(now) {
   const isAutoPause = mode === 'clock' && st.timer.autoPauseWord && !st.timer.running && rem > 0 && rem < st.timer.durationMs;
   const isPauseActive = mode === 'pause' || isAutoPause;
   for (const v of views) {
+    // PREPARING: the clock is hidden — skip every clock update so no rolling
+    // tape / word-swap animation runs (and shows through) behind the icon.
+    if (v === fullV && fullEl.classList.contains('preparing')) continue;
     const word = clockWordFor(st, v.kind);
     if (word !== v.shownWord) swapClockWordV(v, word, { instant: !v.visible });
     if (v === mainV) {

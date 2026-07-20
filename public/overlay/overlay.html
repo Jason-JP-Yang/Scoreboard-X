@@ -27,14 +27,14 @@
       <div class="team team-a row-large">
         <div class="team-bg" data-team-bg="A"></div>
         <div class="team-flash"></div>
-        <div class="team-name" data-flip><span class="name-swap swap-box"></span></div>
+        <div class="team-name" data-flip><div class="team-flag" data-team-flag="A"><img alt=""></div><span class="name-swap swap-box"></span></div>
         <div class="team-score"><div class="score-tape"></div></div>
         <i class="team-bar"></i>
       </div>
       <div class="team team-b row-large">
         <div class="team-bg" data-team-bg="B"></div>
         <div class="team-flash"></div>
-        <div class="team-name" data-flip><span class="name-swap swap-box"></span></div>
+        <div class="team-name" data-flip><div class="team-flag" data-team-flag="B"><img alt=""></div><span class="name-swap swap-box"></span></div>
         <div class="team-score"><div class="score-tape"></div></div>
         <i class="team-bar"></i>
       </div>
@@ -74,16 +74,24 @@
       <div class="team team-a">
         <div class="team-bg" data-team-bg="A"></div>
         <div class="team-flash"></div>
-        <div class="team-name"><span class="name-swap swap-box"></span></div>
-        <div class="team-score"><div class="score-tape"></div></div>
+        <div class="team-flag" data-team-flag="A"><img alt=""></div>
+        <div class="team-main">
+          <div class="team-name"><span class="name-swap swap-box"></span></div>
+          <div class="team-score"><div class="score-tape"></div></div>
+        </div>
       </div>
       <div class="team team-b">
         <div class="team-bg" data-team-bg="B"></div>
         <div class="team-flash"></div>
-        <div class="team-name"><span class="name-swap swap-box"></span></div>
-        <div class="team-score"><div class="score-tape"></div></div>
+        <div class="team-flag" data-team-flag="B"><img alt=""></div>
+        <div class="team-main">
+          <div class="team-name"><span class="name-swap swap-box"></span></div>
+          <div class="team-score"><div class="score-tape"></div></div>
+        </div>
       </div>
     </div>
+    <!-- PREPARING centre icon (assets/main); shown only while #fullboard.preparing -->
+    <div class="prep-icon"><img alt=""></div>
   </div>
 
   <!-- team roster panels: left (A) / right (B) columns, visible only while the

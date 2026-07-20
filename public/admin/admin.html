@@ -80,6 +80,7 @@
             <button class="seg-btn" data-tier="small">小型</button>
             <button class="seg-btn" data-tier="large">大型</button>
             <button class="seg-btn" data-tier="full">全畫幅</button>
+            <button class="seg-btn" data-tier="preparing">PREPARING</button>
           </div>
         </div>
         <div class="row wrap">
@@ -399,6 +400,8 @@
               </span>
             </label>
             <div class="pal-strip" id="palA"></div>
+            <label class="flag-lbl">國旗 <span class="hint">放圖於 assets/flag／未選則不顯示</span></label>
+            <div class="flag-pick" id="flagPickA" data-team="A"></div>
           </div>
           <div class="team-form" data-team="B">
             <div class="team-form-title">客隊 B</div>
@@ -418,6 +421,8 @@
               </span>
             </label>
             <div class="pal-strip" id="palB"></div>
+            <label class="flag-lbl">國旗 <span class="hint">放圖於 assets/flag／未選則不顯示</span></label>
+            <div class="flag-pick" id="flagPickB" data-team="B"></div>
           </div>
         </div>
       </div>
@@ -427,8 +432,12 @@
         <div class="card-title">比賽資訊 <span class="hint">節次文字在「比賽」分頁切換</span></div>
         <div class="switch-row"><span>顯示賽事名稱</span><input type="checkbox" id="swEvent" class="switch-input"><div class="seg seg-toggle" data-for="swEvent"><button type="button" class="seg-btn" data-val="0">關閉</button><button type="button" class="seg-btn" data-val="1">開啟</button></div></div>
         <div class="row">
-          <input class="in grow" id="eventText" maxlength="44" placeholder="賽事名稱，如 HANDBALL CUP 2026">
-          <button class="btn" id="eventBtn">應用</button>
+          <span class="lbl">全名</span>
+          <input class="in grow" id="eventText" placeholder="賽事全名，如 HANDBALL CUP 2026">
+        </div>
+        <div class="row">
+          <span class="lbl">短名</span>
+          <input class="in grow" id="eventShort" placeholder="賽事短名，如 HB CUP 2026">
         </div>
         <div class="switch-row"><span>顯示節次</span><input type="checkbox" id="swPeriod" class="switch-input"><div class="seg seg-toggle" data-for="swPeriod"><button type="button" class="seg-btn" data-val="0">關閉</button><button type="button" class="seg-btn" data-val="1">開啟</button></div></div>
       </div>
@@ -468,6 +477,48 @@
           <div class="seg grow nm-seg" data-tier="full">
             <button class="seg-btn" data-nm="short">短名</button>
             <button class="seg-btn" data-nm="full">全名</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="lbl">小型國旗</span>
+          <div class="seg grow flag-seg" data-tier="small">
+            <button class="seg-btn" data-flag="0">隱藏</button>
+            <button class="seg-btn" data-flag="1">顯示</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="lbl">大型國旗</span>
+          <div class="seg grow flag-seg" data-tier="large">
+            <button class="seg-btn" data-flag="0">隱藏</button>
+            <button class="seg-btn" data-flag="1">顯示</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="lbl">全畫幅國旗</span>
+          <div class="seg grow flag-seg" data-tier="full">
+            <button class="seg-btn" data-flag="0">隱藏</button>
+            <button class="seg-btn" data-flag="1">顯示</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="lbl">小型賽事名</span>
+          <div class="seg grow ev-seg" data-tier="small">
+            <button class="seg-btn" data-ev="short">短名</button>
+            <button class="seg-btn" data-ev="full">全名</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="lbl">大型賽事名</span>
+          <div class="seg grow ev-seg" data-tier="large">
+            <button class="seg-btn" data-ev="short">短名</button>
+            <button class="seg-btn" data-ev="full">全名</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="lbl">全畫幅賽事名</span>
+          <div class="seg grow ev-seg" data-tier="full">
+            <button class="seg-btn" data-ev="short">短名</button>
+            <button class="seg-btn" data-ev="full">全名</button>
           </div>
         </div>
         <div class="switch-row"><span>氛圍動效（緩慢流動）</span><input type="checkbox" id="swAmbient" class="switch-input"><div class="seg seg-toggle" data-for="swAmbient"><button type="button" class="seg-btn" data-val="0">關閉</button><button type="button" class="seg-btn" data-val="1">開啟</button></div></div>
